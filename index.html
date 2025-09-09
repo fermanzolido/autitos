@@ -167,6 +167,7 @@
                 { name: 'Clientes', page: 'customers', roles: ['admin', 'dealer'] },
                 { name: 'Ventas', page: 'sales', roles: ['admin', 'dealer'] },
                 { name: 'Pedidos de Fábrica', page: 'factoryOrders', roles: ['dealer'] },
+                { name: 'Seguimientos', page: 'scheduledFollowUps', roles: ['admin', 'dealer'] },
                 { name: 'Reportes', page: 'reports', roles: ['admin'] },
             ];
 
@@ -214,6 +215,7 @@
                 b2bInvoices: B2BInvoicesPageHTML,
                 biDashboard: BIDashboardPageHTML,
                 forecasts: ForecastsPageHTML,
+                scheduledFollowUps: ScheduledFollowUpsPageHTML,
             };
 
             const renderFunc = pages[state.currentPage] || DashboardPageHTML;
@@ -501,6 +503,51 @@
             `;
         }
 
+        function ScheduledFollowUpsPageHTML() {
+            if (state.role !== 'admin' && state.role !== 'dealer') {
+                return `<div class="p-4">Acceso denegado.</div>`;
+            }
+
+            const pendingFollowUps = state.collections.interactions
+                .filter(i => i.followUpStatus === 'pending')
+                .sort((a, b) => a.followUpDate.toDate() - b.followUpDate.toDate());
+
+            const tableRows = pendingFollowUps.map(i => {
+                const customer = state.collections.customers.find(c => c.id === i.customerId);
+                return `
+                    <tr key=${i.id}>
+                        <td class="px-6 py-4 whitespace-nowrap">${i.followUpDate.toDate().toLocaleDateString()}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${customer ? customer.name : 'N/A'}</td>
+                        <td class="px-6 py-4">${i.notes}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                             <button onclick="window.app.handleCompleteFollowUp('${i.id}')" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
+                                Marcar Completado
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Seguimientos Agendados</h1>
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fecha de Seguimiento</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Notas</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
         function ForecastsPageHTML() {
             if (state.role !== 'admin' && state.role !== 'factory') {
                 return `<div class="p-4">Acceso denegado.</div>`;
@@ -658,10 +705,12 @@
             
             const newCustomerForm = `
                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 border rounded-md">
-                    <input name="name" placeholder="Nombre Completo" class="p-2 border rounded" />
-                    <input name="dni" placeholder="DNI" class="p-2 border rounded" />
+                    <input name="name" placeholder="Nombre Completo" class="p-2 border rounded" required/>
+                    <input name="dni" placeholder="DNI" class="p-2 border rounded" required/>
                     <input name="email" type="email" placeholder="Email" class="p-2 border rounded" />
                     <input name="phone" placeholder="Teléfono" class="p-2 border rounded" />
+                    <input name="gender" placeholder="Género" class="p-2 border rounded" />
+                    <input name="birth_date" type="date" placeholder="Fecha de Nacimiento" class="p-2 border rounded" />
                 </div>
             `;
 
@@ -716,7 +765,27 @@
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700">Precio Final</label>
-                                    <input type="number" name="finalPrice" class="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                    <input type="number" name="finalPrice" class="mt-1 block w-full p-2 border border-gray-300 rounded-md" required/>
+                                </div>
+                                <div class="border-t pt-4 mt-4">
+                                     <h3 class="text-md font-semibold mb-2">Información Adicional de la Venta (Opcional)</h3>
+                                     <div class="space-y-4">
+                                        <select name="financing_method" class="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                            <option value="" disabled selected>Método de Financiación</option>
+                                            <option value="cash">Efectivo</option>
+                                            <option value="internal_financing">Financiación Interna</option>
+                                            <option value="external_financing">Financiación Externa</option>
+                                        </select>
+                                        <div class="p-4 border rounded-md">
+                                            <h4 class="font-semibold">Datos del Vehículo de Canje (Trade-in)</h4>
+                                            <div class="grid grid-cols-2 gap-4 mt-2">
+                                                <input name="trade_in_make" placeholder="Marca" class="p-2 border rounded" />
+                                                <input name="trade_in_model" placeholder="Modelo" class="p-2 border rounded" />
+                                                <input name="trade_in_vin" placeholder="VIN" class="p-2 border rounded" />
+                                                <input name="trade_in_value" type="number" placeholder="Valor" class="p-2 border rounded" />
+                                            </div>
+                                        </div>
+                                     </div>
                                 </div>
                                 <button type="submit" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded w-full">
                                     Registrar Venta
@@ -776,10 +845,12 @@
 
         function CustomerDetailModalHTML(customer, sales, interactions) {
             const salesHTML = sales.map(sale => `
-                <li class="border-b py-2">
+                <li class="border-b py-2 space-y-1">
                     <p><b>Vehículo:</b> ${sale.vehicle ? `${sale.vehicle.make} ${sale.vehicle.model}` : 'N/A'}</p>
                     <p><b>Fecha de Venta:</b> ${sale.saleDate ? sale.saleDate.toDate().toLocaleDateString() : 'N/A'}</p>
                     <p><b>Precio Final:</b> $${sale.finalPrice.toLocaleString()}</p>
+                    ${sale.financing_method ? `<p><b>Financiación:</b> ${sale.financing_method}</p>` : ''}
+                    ${sale.trade_in_vin ? `<p class="text-sm text-gray-600 pl-2">↳ <b>Trade-in:</b> ${sale.trade_in_make} ${sale.trade_in_model} (Valor: $${(sale.trade_in_value || 0).toLocaleString()})</p>` : ''}
                 </li>
             `).join('');
 
@@ -799,6 +870,8 @@
                         <p><b>DNI:</b> ${customer.dni}</p>
                         <p><b>Email:</b> ${customer.email}</p>
                         <p><b>Teléfono:</b> ${customer.phone}</p>
+                        <p><b>Género:</b> ${customer.gender || 'N/A'}</p>
+                        <p><b>Fecha de Nacimiento:</b> ${customer.birth_date ? new Date(customer.birth_date).toLocaleDateString() : 'N/A'}</p>
                     </div>
 
                     <div>
@@ -820,7 +893,11 @@
                                 <option value="Visita">Visita</option>
                                 <option value="Mantenimiento">Mantenimiento</option>
                             </select>
-                            <textarea name="notes" placeholder="Notas de la interacción" class="border p-2 rounded w-full" rows="3"></textarea>
+                            <textarea name="notes" placeholder="Notas de la interacción" class="border p-2 rounded w-full" rows="3" required></textarea>
+                            <div class="flex flex-col">
+                                <label for="followUpDate" class="text-sm text-gray-600">Agendar Seguimiento (Opcional)</label>
+                                <input type="date" name="followUpDate" class="border p-2 rounded w-full" />
+                            </div>
                             <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar Interacción</button>
                         </form>
                     </div>
@@ -909,6 +986,11 @@
                     <input name="dni" value="${customer.dni || ''}" placeholder="DNI" class="border p-2 rounded w-full" />
                     <input name="email" type="email" value="${customer.email || ''}" placeholder="Email" class="border p-2 rounded w-full" />
                     <input name="phone" value="${customer.phone || ''}" placeholder="Teléfono" class="border p-2 rounded w-full" />
+                    <input name="gender" value="${customer.gender || ''}" placeholder="Género" class="border p-2 rounded w-full" />
+                    <div class="flex flex-col">
+                        <label for="birth_date" class="text-sm text-gray-600">Fecha de Nacimiento</label>
+                        <input name="birth_date" type="date" value="${customer.birth_date || ''}" class="border p-2 rounded w-full" />
+                    </div>
                     <div class="flex justify-end gap-4">
                         <button type="button" onclick="window.app.closeModal()" class="bg-gray-500 text-white px-4 py-2 rounded">Cancelar</button>
                         <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar</button>
@@ -1132,6 +1214,9 @@
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 const customerData = Object.fromEntries(formData.entries());
+                if (customerData.birth_date) {
+                    customerData.birth_date = new Date(customerData.birth_date);
+                }
                 
                 try {
                     if (customerId) {
@@ -1161,17 +1246,25 @@
                 const formData = new FormData(e.target);
                 const interactionData = Object.fromEntries(formData.entries());
 
+                const dataToSave = {
+                    ...interactionData,
+                    customerId: customerId,
+                    date: serverTimestamp(),
+                    followUpStatus: 'completed', // Default status
+                };
+
+                if (interactionData.followUpDate) {
+                    dataToSave.followUpDate = new Date(interactionData.followUpDate);
+                    dataToSave.followUpStatus = 'pending';
+                }
+
                 if (!interactionData.notes) {
                     appController.setNotification({ type: 'error', message: 'Las notas no pueden estar vacías.' });
                     return;
                 }
 
                 try {
-                    await addDoc(collection(db, 'interactions'), {
-                        ...interactionData,
-                        customerId: customerId,
-                        date: serverTimestamp(),
-                    });
+                    await addDoc(collection(db, 'interactions'), dataToSave);
                     appController.setNotification({ type: 'success', message: 'Interacción guardada.' });
                     e.target.reset();
                     // No es necesario cerrar y reabrir, Firestore listener actualizará la UI
@@ -1229,20 +1322,34 @@
                     let finalCustomerId = data.customerId;
 
                     if (state.isNewCustomerSale) {
-                        const newCustomerData = { name: data.name, dni: data.dni, email: data.email, phone: data.phone };
+                        const newCustomerData = {
+                            name: data.name,
+                            dni: data.dni,
+                            email: data.email,
+                            phone: data.phone,
+                            gender: data.gender,
+                            birth_date: data.birth_date ? new Date(data.birth_date) : null,
+                        };
                         const newCustomerRef = doc(collection(db, 'customers'));
                         batch.set(newCustomerRef, newCustomerData);
                         finalCustomerId = newCustomerRef.id;
                     }
 
-                    const saleRef = doc(collection(db, 'sales'));
-                    batch.set(saleRef, {
+                    const saleData = {
                         vehicleId: data.vehicleId,
                         customerId: finalCustomerId,
                         dealerId: dealerId,
                         saleDate: serverTimestamp(),
-                        finalPrice: Number(data.finalPrice)
-                    });
+                        finalPrice: Number(data.finalPrice),
+                        financing_method: data.financing_method || null,
+                        trade_in_make: data.trade_in_make || null,
+                        trade_in_model: data.trade_in_model || null,
+                        trade_in_vin: data.trade_in_vin || null,
+                        trade_in_value: data.trade_in_value ? Number(data.trade_in_value) : null,
+                    };
+
+                    const saleRef = doc(collection(db, 'sales'));
+                    batch.set(saleRef, saleData);
 
                     const vehicleRef = doc(db, 'vehicles', data.vehicleId);
                     batch.update(vehicleRef, {
@@ -1544,6 +1651,15 @@
                     e.target.reset();
                 } catch (error) {
                     appController.setNotification({ type: 'error', message: 'Error al guardar el pronóstico.' });
+                    console.error(error);
+                }
+            },
+            handleCompleteFollowUp: async (interactionId) => {
+                try {
+                    await updateDoc(doc(db, 'interactions', interactionId), { followUpStatus: 'completed' });
+                    appController.setNotification({ type: 'success', message: 'Seguimiento completado.' });
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: 'Error al actualizar el seguimiento.' });
                     console.error(error);
                 }
             },
