@@ -1194,7 +1194,7 @@
                      } else {
                         const newVehicleData = {
                              ...vehicleData,
-                             statusHistory: [{ status: vehicleData.status, date: serverTimestamp() }]
+                             statusHistory: [{ status: vehicleData.status, date: new Date() }]
                          };
                          await addDoc(collection(db, 'vehicles'), newVehicleData);
                          appController.setNotification({ type: 'success', message: 'Vehículo creado.' });
