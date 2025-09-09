@@ -68,6 +68,7 @@
                 customers: [],
                 sales: [],
                 availableVehicles: [],
+                interactions: [],
             },
             collectionsLoading: {
                 vehicles: true,
@@ -75,6 +76,7 @@
                 customers: true,
                 sales: true,
                 availableVehicles: true,
+                interactions: true,
             },
             filters: {
                 vehicles: { status: '', make: '', model: '' }
@@ -399,6 +401,7 @@
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                             <button onclick="window.app.openCustomerModal('${c.id}')" class="text-indigo-600 hover:text-indigo-900">Editar</button>
                             <button onclick="window.app.handleDeleteCustomer('${c.id}')" class="text-red-600 hover:text-red-900 ml-4">Eliminar</button>
+                            <button onclick="window.app.openCustomerDetailModal('${c.id}')" class="text-blue-600 hover:text-blue-900 ml-4">Ver</button>
                         </td>
                     ` : ''}
                 </tr>
@@ -532,9 +535,67 @@
                         title = data.id ? 'Editar Cliente' : 'Añadir Cliente';
                         content = CustomerFormHTML(data);
                         break;
+                    case 'customerDetail':
+                        title = `Detalle de Cliente: ${data.customer.name}`;
+                        content = CustomerDetailModalHTML(data.customer, data.sales, data.interactions);
+                        break;
                 }
             }
              modalContainer.innerHTML = ModalHTML(title, content);
+        }
+
+        function CustomerDetailModalHTML(customer, sales, interactions) {
+            const salesHTML = sales.map(sale => `
+                <li class="border-b py-2">
+                    <p><b>Vehículo:</b> ${sale.vehicle ? `${sale.vehicle.make} ${sale.vehicle.model}` : 'N/A'}</p>
+                    <p><b>Fecha de Venta:</b> ${sale.saleDate ? sale.saleDate.toDate().toLocaleDateString() : 'N/A'}</p>
+                    <p><b>Precio Final:</b> $${sale.finalPrice.toLocaleString()}</p>
+                </li>
+            `).join('');
+
+            const interactionsHTML = interactions.map(interaction => `
+                <li class="border-b py-2">
+                    <p><b>Fecha:</b> ${interaction.date ? interaction.date.toDate().toLocaleDateString() : 'N/A'}</p>
+                    <p><b>Tipo:</b> ${interaction.type}</p>
+                    <p><b>Notas:</b> ${interaction.notes}</p>
+                </li>
+            `).join('');
+
+            return `
+                <div class="space-y-6">
+                    <div>
+                        <h3 class="text-lg font-bold border-b pb-2 mb-2">Información de Contacto</h3>
+                        <p><b>Nombre:</b> ${customer.name}</p>
+                        <p><b>DNI:</b> ${customer.dni}</p>
+                        <p><b>Email:</b> ${customer.email}</p>
+                        <p><b>Teléfono:</b> ${customer.phone}</p>
+                    </div>
+
+                    <div>
+                        <h3 class="text-lg font-bold border-b pb-2 mb-2">Historial de Compras</h3>
+                        <ul class="list-disc pl-5">${salesHTML || '<li>No hay compras registradas.</li>'}</ul>
+                    </div>
+
+                    <div>
+                        <h3 class="text-lg font-bold border-b pb-2 mb-2">Historial de Interacciones</h3>
+                        <ul class="list-disc pl-5">${interactionsHTML || '<li>No hay interacciones registradas.</li>'}</ul>
+                    </div>
+
+                    <div>
+                        <h3 class="text-lg font-bold border-b pb-2 mb-2">Añadir Interacción</h3>
+                        <form onsubmit="window.app.handleSaveInteraction(event, '${customer.id}')" class="space-y-4">
+                            <select name="type" class="border p-2 rounded w-full">
+                                <option value="Llamada">Llamada</option>
+                                <option value="Email">Email</option>
+                                <option value="Visita">Visita</option>
+                                <option value="Mantenimiento">Mantenimiento</option>
+                            </select>
+                            <textarea name="notes" placeholder="Notas de la interacción" class="border p-2 rounded w-full" rows="3"></textarea>
+                            <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar Interacción</button>
+                        </form>
+                    </div>
+                </div>
+            `;
         }
 
         function VehicleFormHTML(vehicle = {}) {
@@ -649,6 +710,30 @@
                  state.isModalOpen = true;
                  renderModal();
             },
+            openCustomerDetailModal: (customerId) => {
+                const customer = state.collections.customers.find(c => c.id === customerId);
+                if (!customer) return;
+
+                const customerSales = state.collections.sales
+                    .filter(s => s.customerId === customerId)
+                    .map(sale => {
+                        const vehicle = state.collections.vehicles.find(v => v.id === sale.vehicleId);
+                        return { ...sale, vehicle };
+                    });
+
+                const customerInteractions = state.collections.interactions.filter(i => i.customerId === customerId);
+
+                state.editingItem = {
+                    type: 'customerDetail',
+                    data: {
+                        customer,
+                        sales: customerSales,
+                        interactions: customerInteractions,
+                    }
+                };
+                state.isModalOpen = true;
+                renderModal();
+            },
             closeModal: () => {
                 state.isModalOpen = false;
                 state.editingItem = null;
@@ -750,6 +835,30 @@
                     } catch (error) {
                         appController.setNotification({ type: 'error', message: 'Error al eliminar.' });
                     }
+                }
+            },
+            handleSaveInteraction: async (e, customerId) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const interactionData = Object.fromEntries(formData.entries());
+
+                if (!interactionData.notes) {
+                    appController.setNotification({ type: 'error', message: 'Las notas no pueden estar vacías.' });
+                    return;
+                }
+
+                try {
+                    await addDoc(collection(db, 'interactions'), {
+                        ...interactionData,
+                        customerId: customerId,
+                        date: serverTimestamp(),
+                    });
+                    appController.setNotification({ type: 'success', message: 'Interacción guardada.' });
+                    e.target.reset();
+                    // No es necesario cerrar y reabrir, Firestore listener actualizará la UI
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: 'Error al guardar la interacción.' });
+                    console.error(error);
                 }
             },
             toggleNewCustomerSale: (isChecked) => {
@@ -944,6 +1053,16 @@
                 });
                 firestoreUnsubscribers.push(unsub);
             });
+
+            // Listener for interactions, with special logic to refresh the customer detail modal
+            const unsubInteractions = onSnapshot(collection(db, 'interactions'), snapshot => {
+                state.collections.interactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                state.collectionsLoading.interactions = false;
+                if (state.isModalOpen && state.editingItem && state.editingItem.type === 'customerDetail') {
+                    appController.openCustomerDetailModal(state.editingItem.data.customer.id);
+                }
+            });
+            firestoreUnsubscribers.push(unsubInteractions);
             
             // Listener de vehículos con query condicional
             let vehicleConstraints = [];
