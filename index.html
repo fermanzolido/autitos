@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Gestión de Concesionarios</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Estilo para una transición suave al mostrar/ocultar elementos */
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .fade-out { animation: fadeOut 0.3s ease-in-out; }
+        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div id="app-container"></div>
+
+    <script type="module">
+        // --- SDKs de Firebase ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-auth.js";
+        import {
+            getFirestore, collection, onSnapshot, doc, addDoc,
+            updateDoc, deleteDoc, writeBatch, serverTimestamp, query, where
+        } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-analytics.js";
+
+        // --- INSTRUCCIONES DE CONFIGURACIÓN ---
+        // 1. Reemplaza este objeto `firebaseConfig` con la configuración de tu propio proyecto de Firebase.
+        // 2. Habilita la autenticación por Email/Contraseña en tu proyecto de Firebase.
+        // 3. Configura las reglas de Firestore para mayor seguridad en producción.
+        // 4. Para que los roles (admin, factory, dealer) funcionen, debes configurar Custom Claims
+        //    para los usuarios en Firebase. Esto generalmente se hace a través de una Cloud Function
+        //    que se dispara al crear un usuario o mediante el Admin SDK en un backend.
+        //    Ejemplo con el Admin SDK (en un entorno Node.js):
+        //    admin.auth().setCustomUserClaims(uid, { role: 'admin', dealerId: 'some-dealer-id' });
+        
+        // --- CONFIGURACIÓN DE TU PROYECTO DE FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBDrnsoTrh4lHw6q0-wPUPowUI37164vEw",
+            authDomain: "autitos-82ad2.firebaseapp.com",
+            projectId: "autitos-82ad2",
+            storageBucket: "autitos-82ad2.appspot.com", // Corregido: suele ser .appspot.com
+            messagingSenderId: "1073855461143",
+            appId: "1:1073855461143:web:b15858452517829d786952",
+            measurementId: "G-LLDF0B72DJ"
+        };
+
+        // --- INICIALIZACIÓN DE FIREBASE ---
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const analytics = getAnalytics(app);
+
+        // --- ESTADO GLOBAL DE LA APLICACIÓN ---
+        const state = {
+            user: null,
+            role: null,
+            userClaims: null,
+            authLoading: true,
+            currentPage: 'dashboard',
+            collections: {
+                vehicles: [],
+                dealers: [],
+                customers: [],
+                sales: [],
+                availableVehicles: [],
+            },
+            collectionsLoading: {
+                vehicles: true,
+                dealers: true,
+                customers: true,
+                sales: true,
+                availableVehicles: true,
+            },
+            filters: {
+                vehicles: { status: '', make: '', model: '' }
+            },
+            notification: { message: '', type: '' },
+            isModalOpen: false,
+            editingItem: null,
+            isNewCustomerSale: false,
+        };
+
+        // Contenedor principal de la aplicación
+        const appContainer = document.getElementById('app-container');
+        let firestoreUnsubscribers = [];
+
+        // --- FUNCIONES DE RENDERIZADO (Generan HTML) ---
+
+        const SpinnerHTML = () => `
+            <div class="flex justify-center items-center h-full">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+            </div>`;
+
+        const NotificationHTML = () => {
+            if (!state.notification.message) return '';
+            const typeClasses = { success: "bg-green-500", error: "bg-red-500" };
+            return `
+                <div class="fixed top-5 right-5 p-4 rounded-md shadow-lg text-white transition-opacity duration-300 z-50 ${typeClasses[state.notification.type]}">
+                    <span>${state.notification.message}</span>
+                    <button onclick="window.app.dismissNotification()" class="ml-4 font-bold">X</button>
+                </div>`;
+        };
+        
+        const ModalHTML = (title, content) => {
+            if (!state.isModalOpen) return '';
+            return `
+                <div class="fixed inset-0 bg-black bg-opacity-50 z-40 flex justify-center items-center fade-in">
+                    <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-2xl font-bold text-gray-800">${title}</h2>
+                            <button onclick="window.app.closeModal()" class="text-gray-500 hover:text-gray-800 font-bold text-2xl">&times;</button>
+                        </div>
+                        ${content}
+                    </div>
+                </div>`;
+        };
+
+        // --- RENDERIZADO DE PÁGINAS ---
+        
+        function renderLoginPage() {
+            appContainer.innerHTML = `
+                <div class="flex items-center justify-center min-h-screen bg-gray-100">
+                    <div class="p-8 bg-white rounded-lg shadow-md w-full max-w-sm">
+                        <h2 class="text-2xl font-bold mb-6 text-center text-gray-800">Iniciar Sesión</h2>
+                        <form onsubmit="window.app.handleLogin(event)">
+                            <div class="mb-4">
+                                <label class="block text-gray-700 text-sm font-bold mb-2" for="email">Email</label>
+                                <input id="email" type="email" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required />
+                            </div>
+                            <div class="mb-6">
+                                <label class="block text-gray-700 text-sm font-bold mb-2" for="password">Contraseña</label>
+                                <input id="password" type="password" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required />
+                            </div>
+                            <button id="login-button" type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full disabled:bg-blue-300">
+                                Iniciar Sesión
+                            </button>
+                        </form>
+                    </div>
+                    ${NotificationHTML()}
+                </div>`;
+        }
+
+        function renderMainLayout() {
+            const navLinks = [
+                { name: 'Dashboard', page: 'dashboard', roles: ['admin', 'factory', 'dealer'] },
+                { name: 'Vehículos', page: 'vehicles', roles: ['admin', 'factory', 'dealer'] },
+                { name: 'Concesionarios', page: 'dealers', roles: ['admin', 'factory'] },
+                { name: 'Clientes', page: 'customers', roles: ['admin', 'dealer'] },
+                { name: 'Ventas', page: 'sales', roles: ['admin', 'dealer'] },
+            ];
+
+            const sidebar = `
+                <div class="w-64 bg-gray-800 text-white flex flex-col min-h-screen">
+                    <div class="p-4 text-2xl font-bold border-b border-gray-700">Concesionario</div>
+                    <nav class="flex-1 p-2">
+                        ${navLinks.filter(l => l.roles.includes(state.role)).map(link => `
+                            <a href="#" onclick="event.preventDefault(); window.app.setCurrentPage('${link.page}')"
+                                class="block py-2.5 px-4 rounded ${state.currentPage === link.page ? 'bg-gray-700' : 'hover:bg-gray-700'}">
+                                ${link.name}
+                            </a>
+                        `).join('')}
+                    </nav>
+                    <div class="p-4 border-t border-gray-700">
+                        <button onclick="window.app.handleLogout()" class="w-full bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+                            Cerrar Sesión
+                        </button>
+                    </div>
+                </div>`;
+            
+            appContainer.innerHTML = `
+                <div class="flex bg-gray-100">
+                    ${sidebar}
+                    <main id="page-content" class="flex-1 p-8 overflow-y-auto h-screen"></main>
+                </div>
+                <div id="modal-container"></div>
+                <div id="notification-container">${NotificationHTML()}</div>
+            `;
+            renderCurrentPage();
+        }
+        
+        function renderCurrentPage() {
+            const pageContent = document.getElementById('page-content');
+            if (!pageContent) return;
+
+            const pages = {
+                dashboard: DashboardPageHTML,
+                vehicles: VehiclesPageHTML,
+                dealers: DealersPageHTML,
+                customers: CustomersPageHTML,
+                sales: SalesPageHTML,
+            };
+
+            const renderFunc = pages[state.currentPage] || DashboardPageHTML;
+            pageContent.innerHTML = renderFunc();
+        }
+
+        // --- HTML PARA CADA PÁGINA ---
+
+        function DashboardPageHTML() {
+            const stats = {
+                vehiclesInStock: state.collections.vehicles.filter(v => v.status !== 'vendido').length,
+                totalSales: state.collections.sales.length,
+                totalDealers: state.collections.dealers.length,
+            };
+             return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Vehículos en Stock</h3><p class="text-4xl font-bold text-blue-600">${stats.vehiclesInStock}</p></div>
+                        <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Ventas Totales</h3><p class="text-4xl font-bold text-green-600">${stats.totalSales}</p></div>
+                        <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Concesionarios</h3><p class="text-4xl font-bold text-purple-600">${stats.totalDealers}</p></div>
+                    </div>
+                </div>`;
+        }
+
+        function VehiclesPageHTML() {
+            if (state.collectionsLoading.vehicles) return SpinnerHTML();
+            
+            const { status, make, model } = state.filters.vehicles;
+            const filteredVehicles = state.collections.vehicles.filter(v =>
+                (status ? v.status === status : true) &&
+                (make ? v.make.toLowerCase().includes(make.toLowerCase()) : true) &&
+                (model ? v.model.toLowerCase().includes(model.toLowerCase()) : true)
+            );
+
+            const getStatusBadge = (vehicleStatus) => {
+                const styles = {
+                    vendido: 'bg-red-100 text-red-800',
+                    enConcesionario: 'bg-green-100 text-green-800',
+                    default: 'bg-yellow-100 text-yellow-800'
+                };
+                return styles[vehicleStatus] || styles.default;
+            };
+
+            const tableRows = filteredVehicles.map(v => `
+                <tr key=${v.id}>
+                    <td class="px-6 py-4">${v.make} ${v.model}</td>
+                    <td class="px-6 py-4">${v.vin}<br/>$${(v.price || 0).toLocaleString()}</td>
+                    <td class="px-6 py-4">
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadge(v.status)}">
+                            ${v.status}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-sm font-medium">
+                        ${(state.role === 'admin' || state.role === 'factory') ? `
+                            <div class="flex items-center space-x-2">
+                                <button onclick="window.app.openVehicleModal('${v.id}')" class="text-indigo-600 hover:text-indigo-900">Editar</button>
+                                <button onclick="window.app.handleDeleteVehicle('${v.id}')" class="text-red-600 hover:text-red-900">Eliminar</button>
+                                <select onchange="window.app.handleAssignDealer('${v.id}', this.value)" class="border p-1 rounded text-xs">
+                                    <option value="" ${!v.dealerId ? 'selected' : ''} disabled>Asignar...</option>
+                                    ${state.collections.dealers.map(d => `<option value="${d.id}" ${v.dealerId === d.id ? 'selected' : ''}>${d.name}</option>`).join('')}
+                                </select>
+                            </div>
+                        ` : `<span class="text-gray-500">Sin acciones</span>`}
+                    </td>
+                </tr>
+            `).join('');
+
+            return `
+                <div>
+                    <div class="flex justify-between items-center mb-6">
+                        <h1 class="text-3xl font-bold text-gray-800">Gestión de Vehículos</h1>
+                        ${(state.role === 'admin' || state.role === 'factory') ? `
+                            <button onclick="window.app.openVehicleModal()" class="bg-blue-500 text-white px-4 py-2 rounded shadow">Añadir Vehículo</button>
+                        ` : ''}
+                    </div>
+
+                    <div class="mb-4 grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg shadow">
+                        <input type="text" placeholder="Filtrar por Marca" oninput="window.app.updateVehicleFilter('make', this.value)" value="${make}" class="border p-2 rounded"/>
+                        <input type="text" placeholder="Filtrar por Modelo" oninput="window.app.updateVehicleFilter('model', this.value)" value="${model}" class="border p-2 rounded"/>
+                        <select onchange="window.app.updateVehicleFilter('status', this.value)" class="border p-2 rounded">
+                            <option value="" ${status === '' ? 'selected' : ''}>Todos los Estados</option>
+                            <option value="enFabrica" ${status === 'enFabrica' ? 'selected' : ''}>En Fábrica</option>
+                            <option value="enTransito" ${status === 'enTransito' ? 'selected' : ''}>En Tránsito</option>
+                            <option value="enConcesionario" ${status === 'enConcesionario' ? 'selected' : ''}>En Concesionario</option>
+                            <option value="vendido" ${status === 'vendido' ? 'selected' : ''}>Vendido</option>
+                        </select>
+                    </div>
+
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Marca/Modelo</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN/Precio</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
+                        </table>
+                    </div>
+                </div>`;
+        }
+        
+        // ... Implementar HTML para las otras páginas (Dealers, Customers, Sales) de manera similar
+        // Por brevedad, se omiten aquí, pero la estructura sigue el mismo patrón.
+        function DealersPageHTML() {
+             if (state.collectionsLoading.dealers) return SpinnerHTML();
+             if (state.role !== 'admin' && state.role !== 'factory') {
+                 return `<div class="p-4">Acceso denegado. No tienes permisos para ver esta página.</div>`;
+             }
+             
+             const tableRows = state.collections.dealers.map(d => `
+                <tr key=${d.id}>
+                    <td class="px-6 py-4 whitespace-nowrap">${d.name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${d.address}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${d.territory}</td>
+                    ${state.role === 'admin' ? `
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button onclick="window.app.openDealerModal('${d.id}')" class="text-indigo-600 hover:text-indigo-900">Editar</button>
+                            <button onclick="window.app.handleDeleteDealer('${d.id}')" class="text-red-600 hover:text-red-900 ml-4">Eliminar</button>
+                        </td>
+                    ` : ''}
+                </tr>
+            `).join('');
+
+             return `
+                <div>
+                    <div class="flex justify-between items-center mb-6">
+                        <h1 class="text-3xl font-bold text-gray-800">Gestión de Concesionarios</h1>
+                        ${state.role === 'admin' ? `
+                            <button onclick="window.app.openDealerModal()" class="bg-blue-500 text-white px-4 py-2 rounded shadow">Añadir Concesionario</button>
+                        ` : ''}
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                             <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nombre</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Dirección</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Territorio</th>
+                                    ${state.role === 'admin' ? '<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>' : ''}
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+             `;
+        }
+
+        function CustomersPageHTML() {
+            if (state.collectionsLoading.customers) return SpinnerHTML();
+            if (state.role !== 'admin' && state.role !== 'dealer') {
+                return `<div class="p-4">Acceso denegado.</div>`;
+            }
+
+            const tableRows = state.collections.customers.map(c => `
+                <tr key=${c.id}>
+                    <td class="px-6 py-4 whitespace-nowrap">${c.name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${c.dni}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${c.email}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${c.phone}</td>
+                    ${state.role === 'admin' ? `
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button onclick="window.app.openCustomerModal('${c.id}')" class="text-indigo-600 hover:text-indigo-900">Editar</button>
+                            <button onclick="window.app.handleDeleteCustomer('${c.id}')" class="text-red-600 hover:text-red-900 ml-4">Eliminar</button>
+                        </td>
+                    ` : ''}
+                </tr>
+            `).join('');
+
+            return `
+                <div>
+                    <div class="flex justify-between items-center mb-6">
+                        <h1 class="text-3xl font-bold text-gray-800">Gestión de Clientes</h1>
+                        <button onclick="window.app.openCustomerModal()" class="bg-blue-500 text-white px-4 py-2 rounded shadow">Añadir Cliente</button>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nombre</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">DNI</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Teléfono</th>
+                                    ${state.role === 'admin' ? '<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>' : ''}
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function SalesPageHTML() {
+             if (state.collectionsLoading.sales || state.collectionsLoading.customers || state.collectionsLoading.availableVehicles) return SpinnerHTML();
+            
+            const newCustomerForm = `
+                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 border rounded-md">
+                    <input name="name" placeholder="Nombre Completo" class="p-2 border rounded" />
+                    <input name="dni" placeholder="DNI" class="p-2 border rounded" />
+                    <input name="email" type="email" placeholder="Email" class="p-2 border rounded" />
+                    <input name="phone" placeholder="Teléfono" class="p-2 border rounded" />
+                </div>
+            `;
+
+            const existingCustomerSelect = `
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Cliente Existente</label>
+                    <select name="customerId" class="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                        <option value="" disabled selected>Seleccione un cliente</option>
+                        ${state.collections.customers.map(c => `<option value="${c.id}">${c.name} (${c.dni})</option>`).join('')}
+                    </select>
+                </div>
+            `;
+
+             const salesHistoryRows = state.collections.sales.map(s => `
+                <tr key=${s.id}>
+                    <td class="px-6 py-4 whitespace-nowrap">${s.saleDate?.toDate().toLocaleDateString() || 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-xs">${s.vehicleId}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-xs">${s.customerId}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">$${s.finalPrice.toLocaleString()}</td>
+                </tr>
+             `).join('');
+
+             return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Gestión de Ventas</h1>
+                    ${(state.role === 'dealer' || state.role === 'admin') ? `
+                        <div class="bg-white p-6 rounded-lg shadow mb-8">
+                            <h2 class="text-xl font-semibold mb-4">Registrar Nueva Venta</h2>
+                            <form onsubmit="window.app.handleRegisterSale(event)" class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Vehículo</label>
+                                    <select name="vehicleId" class="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                        <option value="" disabled selected>Seleccione un vehículo</option>
+                                        ${state.collections.availableVehicles.map(v => `<option value="${v.id}">${v.make} ${v.model} (${v.vin})</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <div class="flex items-center mb-2">
+                                        <input type="checkbox" id="newCustomer" onchange="window.app.toggleNewCustomerSale(this.checked)" ${state.isNewCustomerSale ? 'checked' : ''} class="h-4 w-4 text-indigo-600 border-gray-300 rounded"/>
+                                        <label for="newCustomer" class="ml-2 block text-sm text-gray-900">Crear Nuevo Cliente</label>
+                                    </div>
+                                    <div id="customer-form-container">
+                                        ${state.isNewCustomerSale ? newCustomerForm : existingCustomerSelect}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Precio Final</label>
+                                    <input type="number" name="finalPrice" class="mt-1 block w-full p-2 border border-gray-300 rounded-md" />
+                                </div>
+                                <button type="submit" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded w-full">
+                                    Registrar Venta
+                                </button>
+                            </form>
+                        </div>
+                    ` : ''}
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <h2 class="text-xl font-semibold mb-4">Historial de Ventas</h2>
+                        <table class="min-w-full divide-y divide-gray-200">
+                             <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vehículo ID</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente ID</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Precio Final</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${salesHistoryRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+             `;
+        }
+
+        // --- FUNCIONES DE MODAL ---
+
+        function renderModal() {
+            const modalContainer = document.getElementById('modal-container');
+            if(!modalContainer) return;
+            
+            let title = '', content = '';
+            if (state.isModalOpen && state.editingItem) {
+                const { type, data } = state.editingItem;
+                switch(type) {
+                    case 'vehicle':
+                        title = data.id ? 'Editar Vehículo' : 'Añadir Vehículo';
+                        content = VehicleFormHTML(data);
+                        break;
+                    case 'dealer':
+                        title = data.id ? 'Editar Concesionario' : 'Añadir Concesionario';
+                        content = DealerFormHTML(data);
+                        break;
+                    case 'customer':
+                        title = data.id ? 'Editar Cliente' : 'Añadir Cliente';
+                        content = CustomerFormHTML(data);
+                        break;
+                }
+            }
+             modalContainer.innerHTML = ModalHTML(title, content);
+        }
+
+        function VehicleFormHTML(vehicle = {}) {
+            return `
+                <form onsubmit="window.app.handleSaveVehicle(event, '${vehicle.id || ''}')" class="space-y-4">
+                    <input name="make" value="${vehicle.make || ''}" placeholder="Marca" class="border p-2 rounded w-full" />
+                    <input name="model" value="${vehicle.model || ''}" placeholder="Modelo" class="border p-2 rounded w-full" />
+                    <input name="vin" value="${vehicle.vin || ''}" placeholder="VIN" class="border p-2 rounded w-full" />
+                    <input name="price" type="number" value="${vehicle.price || ''}" placeholder="Precio" class="border p-2 rounded w-full" />
+                    <select name="status" class="border p-2 rounded w-full">
+                        <option value="enFabrica" ${vehicle.status === 'enFabrica' ? 'selected' : ''}>En Fábrica</option>
+                        <option value="enTransito" ${vehicle.status === 'enTransito' ? 'selected' : ''}>En Tránsito</option>
+                        <option value="enConcesionario" ${vehicle.status === 'enConcesionario' ? 'selected' : ''}>En Concesionario</option>
+                        <option value="vendido" ${vehicle.status === 'vendido' ? 'selected' : ''}>Vendido</option>
+                    </select>
+                    <div class="flex justify-end gap-4">
+                        <button type="button" onclick="window.app.closeModal()" class="bg-gray-500 text-white px-4 py-2 rounded">Cancelar</button>
+                        <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar</button>
+                    </div>
+                </form>
+            `;
+        }
+        function DealerFormHTML(dealer = {}) {
+            return `
+                 <form onsubmit="window.app.handleSaveDealer(event, '${dealer.id || ''}')" class="space-y-4">
+                    <input name="name" value="${dealer.name || ''}" placeholder="Nombre" class="border p-2 rounded w-full" />
+                    <input name="address" value="${dealer.address || ''}" placeholder="Dirección" class="border p-2 rounded w-full" />
+                    <input name="territory" value="${dealer.territory || ''}" placeholder="Territorio" class="border p-2 rounded w-full" />
+                    <div class="flex justify-end gap-4">
+                        <button type="button" onclick="window.app.closeModal()" class="bg-gray-500 text-white px-4 py-2 rounded">Cancelar</button>
+                        <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar</button>
+                    </div>
+                </form>
+            `;
+        }
+        function CustomerFormHTML(customer = {}) {
+            return `
+                 <form onsubmit="window.app.handleSaveCustomer(event, '${customer.id || ''}')" class="space-y-4">
+                    <input name="name" value="${customer.name || ''}" placeholder="Nombre Completo" class="border p-2 rounded w-full" />
+                    <input name="dni" value="${customer.dni || ''}" placeholder="DNI" class="border p-2 rounded w-full" />
+                    <input name="email" type="email" value="${customer.email || ''}" placeholder="Email" class="border p-2 rounded w-full" />
+                    <input name="phone" value="${customer.phone || ''}" placeholder="Teléfono" class="border p-2 rounded w-full" />
+                    <div class="flex justify-end gap-4">
+                        <button type="button" onclick="window.app.closeModal()" class="bg-gray-500 text-white px-4 py-2 rounded">Cancelar</button>
+                        <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar</button>
+                    </div>
+                </form>
+            `;
+        }
+        
+        // --- LÓGICA DE LA APLICACIÓN (Controladores) ---
+        const appController = {
+            
+            // --- Autenticación ---
+            handleLogin: async (e) => {
+                e.preventDefault();
+                const button = document.getElementById('login-button');
+                button.disabled = true;
+                button.textContent = 'Iniciando...';
+                
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+                try {
+                    await signInWithEmailAndPassword(auth, email, password);
+                } catch (err) {
+                    appController.setNotification({ type: 'error', message: 'Credenciales inválidas o error de red.' });
+                    console.error("Error de inicio de sesión:", err);
+                    button.disabled = false;
+                    button.textContent = 'Iniciar Sesión';
+                }
+            },
+            handleLogout: async () => {
+                await signOut(auth);
+            },
+            
+            // --- Notificaciones ---
+            setNotification: (notif) => {
+                state.notification = notif;
+                renderNotification();
+                setTimeout(() => appController.dismissNotification(), 5000);
+            },
+            dismissNotification: () => {
+                if(state.notification.message){
+                    state.notification = { message: '', type: '' };
+                    renderNotification();
+                }
+            },
+
+            // --- Navegación ---
+            setCurrentPage: (page) => {
+                state.currentPage = page;
+                renderMainLayout();
+            },
+
+             // --- Lógica de CRUD y Acciones ---
+            openVehicleModal: (vehicleId = null) => {
+                const vehicleData = vehicleId ? state.collections.vehicles.find(v => v.id === vehicleId) : {};
+                state.editingItem = { type: 'vehicle', data: vehicleData };
+                state.isModalOpen = true;
+                renderModal();
+            },
+            openDealerModal: (dealerId = null) => {
+                 const dealerData = dealerId ? state.collections.dealers.find(d => d.id === dealerId) : {};
+                 state.editingItem = { type: 'dealer', data: dealerData };
+                 state.isModalOpen = true;
+                 renderModal();
+            },
+            openCustomerModal: (customerId = null) => {
+                 const customerData = customerId ? state.collections.customers.find(c => c.id === customerId) : {};
+                 state.editingItem = { type: 'customer', data: customerData };
+                 state.isModalOpen = true;
+                 renderModal();
+            },
+            closeModal: () => {
+                state.isModalOpen = false;
+                state.editingItem = null;
+                renderModal();
+            },
+            updateVehicleFilter: (key, value) => {
+                state.filters.vehicles[key] = value;
+                renderCurrentPage();
+            },
+            handleSaveVehicle: async (e, vehicleId) => {
+                 e.preventDefault();
+                 const formData = new FormData(e.target);
+                 const vehicleData = Object.fromEntries(formData.entries());
+                 vehicleData.price = Number(vehicleData.price);
+                
+                 try {
+                     if (vehicleId) {
+                         await updateDoc(doc(db, 'vehicles', vehicleId), vehicleData);
+                         appController.setNotification({ type: 'success', message: 'Vehículo actualizado.' });
+                     } else {
+                         await addDoc(collection(db, 'vehicles'), vehicleData);
+                         appController.setNotification({ type: 'success', message: 'Vehículo creado.' });
+                     }
+                     appController.closeModal();
+                 } catch (error) {
+                     appController.setNotification({ type: 'error', message: 'Error al guardar el vehículo.' });
+                     console.error(error);
+                 }
+            },
+            handleDeleteVehicle: async (id) => {
+                if (confirm('¿Estás seguro de que quieres eliminar este vehículo?')) {
+                    try {
+                        await deleteDoc(doc(db, 'vehicles', id));
+                        appController.setNotification({ type: 'success', message: 'Vehículo eliminado.' });
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: 'Error al eliminar.' });
+                    }
+                }
+            },
+            handleAssignDealer: async (vehicleId, dealerId) => {
+                 try {
+                     await updateDoc(doc(db, 'vehicles', vehicleId), { dealerId });
+                     appController.setNotification({ type: 'success', message: 'Concesionario asignado.' });
+                 } catch (error) {
+                     appController.setNotification({ type: 'error', message: 'Error al asignar.' });
+                 }
+            },
+            handleSaveDealer: async (e, dealerId) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const dealerData = Object.fromEntries(formData.entries());
+                
+                try {
+                    if (dealerId) {
+                        await updateDoc(doc(db, 'dealers', dealerId), dealerData);
+                        appController.setNotification({ type: 'success', message: 'Concesionario actualizado.' });
+                    } else {
+                        await addDoc(collection(db, 'dealers'), dealerData);
+                        appController.setNotification({ type: 'success', message: 'Concesionario creado.' });
+                    }
+                    appController.closeModal();
+                } catch(error) {
+                     appController.setNotification({ type: 'error', message: 'Error al guardar.' });
+                }
+            },
+            handleDeleteDealer: async (id) => {
+                 if (confirm('¿Estás seguro?')) {
+                    try {
+                        await deleteDoc(doc(db, 'dealers', id));
+                        appController.setNotification({ type: 'success', message: 'Concesionario eliminado.' });
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: 'Error al eliminar.' });
+                    }
+                }
+            },
+            handleSaveCustomer: async (e, customerId) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const customerData = Object.fromEntries(formData.entries());
+                
+                try {
+                    if (customerId) {
+                         await updateDoc(doc(db, 'customers', customerId), customerData);
+                         appController.setNotification({ type: 'success', message: 'Cliente actualizado.' });
+                    } else {
+                         await addDoc(collection(db, 'customers'), customerData);
+                         appController.setNotification({ type: 'success', message: 'Cliente creado.' });
+                    }
+                    appController.closeModal();
+                } catch(error) {
+                    appController.setNotification({ type: 'error', message: 'Error al guardar.' });
+                }
+            },
+            handleDeleteCustomer: async(id) => {
+                if(confirm('¿Estás seguro?')){
+                    try {
+                        await deleteDoc(doc(db, 'customers', id));
+                        appController.setNotification({ type: 'success', message: 'Cliente eliminado.' });
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: 'Error al eliminar.' });
+                    }
+                }
+            },
+            toggleNewCustomerSale: (isChecked) => {
+                state.isNewCustomerSale = isChecked;
+                const container = document.getElementById('customer-form-container');
+                if (container) {
+                     container.innerHTML = isChecked ? `
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 border rounded-md">
+                            <input name="name" placeholder="Nombre Completo" class="p-2 border rounded" />
+                            <input name="dni" placeholder="DNI" class="p-2 border rounded" />
+                            <input name="email" type="email" placeholder="Email" class="p-2 border rounded" />
+                            <input name="phone" placeholder="Teléfono" class="p-2 border rounded" />
+                        </div>
+                    ` : `
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Cliente Existente</label>
+                            <select name="customerId" class="mt-1 block w-full p-2 border border-gray-300 rounded-md">
+                                <option value="" disabled selected>Seleccione un cliente</option>
+                                ${state.collections.customers.map(c => `<option value="${c.id}">${c.name} (${c.dni})</option>`).join('')}
+                            </select>
+                        </div>
+                    `;
+                }
+            },
+            handleRegisterSale: async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const data = Object.fromEntries(formData.entries());
+
+                const dealerId = state.userClaims?.dealerId;
+                if (!data.vehicleId || (!data.customerId && !state.isNewCustomerSale) || !data.finalPrice || !dealerId) {
+                    appController.setNotification({ type: 'error', message: 'Todos los campos son requeridos.' });
+                    return;
+                }
+                
+                const batch = writeBatch(db);
+                try {
+                    let finalCustomerId = data.customerId;
+
+                    if (state.isNewCustomerSale) {
+                        const newCustomerData = { name: data.name, dni: data.dni, email: data.email, phone: data.phone };
+                        const newCustomerRef = doc(collection(db, 'customers'));
+                        batch.set(newCustomerRef, newCustomerData);
+                        finalCustomerId = newCustomerRef.id;
+                    }
+
+                    const saleRef = doc(collection(db, 'sales'));
+                    batch.set(saleRef, {
+                        vehicleId: data.vehicleId,
+                        customerId: finalCustomerId,
+                        dealerId: dealerId,
+                        saleDate: serverTimestamp(),
+                        finalPrice: Number(data.finalPrice)
+                    });
+
+                    const vehicleRef = doc(db, 'vehicles', data.vehicleId);
+                    batch.update(vehicleRef, { status: 'vendido' });
+
+                    await batch.commit();
+                    appController.setNotification({ type: 'success', message: 'Venta registrada con éxito.' });
+                    
+                    state.isNewCustomerSale = false;
+                    renderCurrentPage(); // Re-render para resetear el formulario
+
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: 'Error al registrar la venta.' });
+                    console.error("Error registrando venta:", error);
+                }
+            },
+        };
+
+        // --- INICIALIZACIÓN Y SUSCRIPCIONES ---
+        
+        function mainRender() {
+            if (state.authLoading) {
+                appContainer.innerHTML = `<div class="min-h-screen flex items-center justify-center">${SpinnerHTML()}</div>`;
+            } else if (state.user && state.role) {
+                renderMainLayout();
+            } else {
+                renderLoginPage();
+            }
+        }
+        
+        function renderNotification() {
+            const container = document.getElementById('notification-container') || appContainer;
+            if(container) container.innerHTML = NotificationHTML();
+        }
+
+        function setupFirestoreListeners() {
+            // Limpiar listeners anteriores
+            firestoreUnsubscribers.forEach(unsub => unsub());
+            firestoreUnsubscribers = [];
+
+            const collectionsToWatch = ['dealers', 'customers', 'sales'];
+            
+            collectionsToWatch.forEach(name => {
+                const unsub = onSnapshot(collection(db, name), snapshot => {
+                    state.collections[name] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    state.collectionsLoading[name] = false;
+                    if(state.currentPage === name || state.currentPage === 'dashboard') renderCurrentPage();
+                });
+                firestoreUnsubscribers.push(unsub);
+            });
+            
+            // Listener de vehículos con query condicional
+            let vehicleConstraints = [];
+            if (state.role === 'dealer' && state.userClaims?.dealerId) {
+                vehicleConstraints.push(where('dealerId', '==', state.userClaims.dealerId));
+            }
+            const vehicleQuery = query(collection(db, 'vehicles'), ...vehicleConstraints);
+            const unsubVehicles = onSnapshot(vehicleQuery, snapshot => {
+                state.collections.vehicles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                state.collectionsLoading.vehicles = false;
+                if(state.currentPage === 'vehicles' || state.currentPage === 'dashboard') renderCurrentPage();
+            });
+            firestoreUnsubscribers.push(unsubVehicles);
+
+            // Listener para vehículos disponibles para venta
+            let availableVehicleConstraints = [where('status', '==', 'enConcesionario')];
+             if (state.role === 'dealer' && state.userClaims?.dealerId) {
+                availableVehicleConstraints.push(where('dealerId', '==', state.userClaims.dealerId));
+            }
+            const availableVehicleQuery = query(collection(db, 'vehicles'), ...availableVehicleConstraints);
+            const unsubAvailable = onSnapshot(availableVehicleQuery, snapshot => {
+                state.collections.availableVehicles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                state.collectionsLoading.availableVehicles = false;
+                if(state.currentPage === 'sales') renderCurrentPage();
+            });
+             firestoreUnsubscribers.push(unsubAvailable);
+
+        }
+
+        // --- PUNTO DE ENTRADA ---
+        onAuthStateChanged(auth, async (firebaseUser) => {
+            if (firebaseUser) {
+                const idTokenResult = await firebaseUser.getIdTokenResult(true);
+                const claims = idTokenResult.claims;
+                state.user = firebaseUser;
+                // --- CAMBIO CLAVE ---
+                // Si el usuario no tiene un rol en Firebase, le asignamos 'dealer' por defecto para que pueda entrar.
+                // Para una solución permanente, debes configurar los Custom Claims en tu proyecto de Firebase.
+                state.role = claims.role || 'dealer'; 
+                state.userClaims = claims;
+                setupFirestoreListeners();
+            } else {
+                state.user = null;
+                state.role = null;
+                state.userClaims = null;
+                firestoreUnsubscribers.forEach(unsub => unsub());
+                firestoreUnsubscribers = [];
+            }
+            state.authLoading = false;
+            mainRender();
+        });
+
+        // Exponer el controlador al objeto window para los eventos inline
+        window.app = appController;
+        
+    </script>
+</body>
+</html>
+
+
+
