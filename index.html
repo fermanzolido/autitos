@@ -83,7 +83,7 @@
                 forecasts: true,
             },
             filters: {
-                vehicles: { status: [], make: '', model: '' }
+                vehicles: { status: [], make: '', model: '', daysInStock_greaterThan: '' }
             },
             notification: { message: '', type: '' },
             isModalOpen: false,
@@ -94,6 +94,10 @@
                 customers: { currentPage: 1, itemsPerPage: 10 },
                 sales: { currentPage: 1, itemsPerPage: 10 },
             },
+            ui: {
+                tableDensity: 'default', // 'default' or 'compact'
+                visibleVehicleColumns: ['make_model', 'vin_price', 'status', 'actions'],
+            }
         };
 
         // Contenedor principal de la aplicación
@@ -284,18 +288,19 @@
                 <div>
                     <h1 class="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
                     <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-                        <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Vehículos en Stock</h3><p class="text-4xl font-bold text-blue-600">${stats.vehiclesInStock}</p></div>
-                        <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Ventas Totales</h3><p class="text-4xl font-bold text-green-600">${stats.totalSales}</p></div>
-
                         ${(state.role === 'admin' || state.role === 'factory') ? `
-                            <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Concesionarios</h3><p class="text-4xl font-bold text-purple-600">${stats.totalDealers}</p></div>
+                            <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Vehículos en Stock</h3><p class="text-4xl font-bold text-blue-600">${stats.vehiclesInStock}</p></div>
+                            <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Ventas Totales</h3><p class="text-4xl font-bold text-green-600">${stats.totalSales}</p></div>
                             <div class="bg-white p-6 rounded-lg shadow-md">
                                 <h3 class="text-lg font-semibold">Días Promedio en Stock (Red)</h3>
                                 <p class="text-4xl font-bold text-orange-600">${stats.avgDaysInStock}</p>
                             </div>
+                            <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Concesionarios</h3><p class="text-4xl font-bold text-purple-600">${stats.totalDealers}</p></div>
                         ` : ''}
 
                         ${(state.role === 'dealer') ? `
+                            <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Vehículos en Stock</h3><p class="text-4xl font-bold text-blue-600">${stats.vehiclesInStock}</p></div>
+                            <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Ventas Totales</h3><p class="text-4xl font-bold text-green-600">${stats.totalSales}</p></div>
                             <div class="bg-white p-6 rounded-lg shadow-md">
                                 <h3 class="text-lg font-semibold">Mis Días Promedio en Stock</h3>
                                 <p class="text-4xl font-bold text-indigo-600">${stats.dealerAvgDaysInStock}</p>
@@ -318,12 +323,25 @@
         function VehiclesPageHTML() {
             if (state.collectionsLoading.vehicles) return SpinnerHTML();
             
-            const { status, make, model } = state.filters.vehicles;
-            const filteredVehicles = state.collections.vehicles.filter(v =>
-                (status.length === 0 || status.includes(v.status)) &&
-                (make ? v.make.toLowerCase().includes(make.toLowerCase()) : true) &&
-                (model ? v.model.toLowerCase().includes(model.toLowerCase()) : true)
-            );
+            const { status, make, model, daysInStock_greaterThan } = state.filters.vehicles;
+            const filteredVehicles = state.collections.vehicles.filter(v => {
+                const statusMatch = status.length === 0 || status.includes(v.status);
+                const makeMatch = make ? v.make.toLowerCase().includes(make.toLowerCase()) : true;
+                const modelMatch = model ? v.model.toLowerCase().includes(model.toLowerCase()) : true;
+
+                let daysInStockMatch = true;
+                if (daysInStock_greaterThan && v.statusHistory && v.status !== 'vendido') {
+                    // This is a client-side calculation and can be slow on very large datasets.
+                    // It calculates days since the *last* status change.
+                    const lastStatusUpdate = v.statusHistory[v.statusHistory.length - 1].date.toDate();
+                    const now = new Date();
+                    const diffTime = Math.abs(now - lastStatusUpdate);
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    daysInStockMatch = diffDays > Number(daysInStock_greaterThan);
+                }
+
+                return statusMatch && makeMatch && modelMatch && daysInStockMatch;
+            });
 
             const { currentPage, itemsPerPage } = state.pagination.vehicles;
             const paginatedVehicles = filteredVehicles.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -337,16 +355,17 @@
                 return styles[vehicleStatus] || styles.default;
             };
 
+            const cellPadding = state.ui.tableDensity === 'compact' ? 'px-4 py-2' : 'px-6 py-4';
             const tableRows = paginatedVehicles.map(v => `
                 <tr key=${v.id}>
-                    <td class="px-6 py-4">${v.make} ${v.model} ${v.trim || ''}</td>
-                    <td class="px-6 py-4">${v.vin}<br/>$${(v.price || 0).toLocaleString()}</td>
-                    <td class="px-6 py-4">
+                    ${state.ui.visibleVehicleColumns.includes('make_model') ? `<td class="${cellPadding}">${v.make} ${v.model} ${v.trim || ''}</td>` : ''}
+                    ${state.ui.visibleVehicleColumns.includes('vin_price') ? `<td class="${cellPadding}">${v.vin}<br/>$${(v.price || 0).toLocaleString()}</td>` : ''}
+                    ${state.ui.visibleVehicleColumns.includes('status') ? `<td class="${cellPadding}">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadge(v.status)}">
                             ${v.status}
                         </span>
-                    </td>
-                    <td class="px-6 py-4 text-sm font-medium">
+                    </td>` : ''}
+                    ${state.ui.visibleVehicleColumns.includes('actions') ? `<td class="${cellPadding} text-sm font-medium">
                         ${(state.role === 'admin' || state.role === 'factory') ? `
                             <div class="flex items-center space-x-2">
                                 <button onclick="window.app.openVehicleModal('${v.id}')" class="text-indigo-600 hover:text-indigo-900">Editar</button>
@@ -357,7 +376,7 @@
                                 </select>
                             </div>
                         ` : `<span class="text-gray-500">Sin acciones</span>`}
-                    </td>
+                    </td>` : ''}
                 </tr>
             `).join('');
 
@@ -365,14 +384,36 @@
                 <div>
                     <div class="flex justify-between items-center mb-6">
                         <h1 class="text-3xl font-bold text-gray-800">Gestión de Vehículos</h1>
-                        ${(state.role === 'admin' || state.role === 'factory') ? `
-                            <button onclick="window.app.openVehicleModal()" class="bg-blue-500 text-white px-4 py-2 rounded shadow">Añadir Vehículo</button>
-                        ` : ''}
+                        <div class="flex items-center space-x-4">
+                            <div class="relative inline-block text-left">
+                                <button onclick="this.nextElementSibling.classList.toggle('hidden')" class="text-sm text-gray-600 hover:text-gray-900">Columnas</button>
+                                <div class="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 hidden z-10">
+                                    <div class="py-1" role="menu" aria-orientation="vertical">
+                                        ${['make_model', 'vin_price', 'status', 'actions'].map(col => `
+                                            <a href="#" class="block px-4 py-2 text-sm text-gray-700">
+                                                <label class="inline-flex items-center">
+                                                    <input type="checkbox" onchange="window.app.toggleVehicleColumn('${col}')"
+                                                           ${state.ui.visibleVehicleColumns.includes(col) ? 'checked' : ''} class="form-checkbox">
+                                                    <span class="ml-2">${col.replace('_', ' ')}</span>
+                                                </label>
+                                            </a>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                            <button onclick="window.app.toggleTableDensity()" class="text-sm text-gray-600 hover:text-gray-900">
+                                Vista ${state.ui.tableDensity === 'compact' ? 'Normal' : 'Compacta'}
+                            </button>
+                            ${(state.role === 'admin' || state.role === 'factory') ? `
+                                <button onclick="window.app.openVehicleModal()" class="bg-blue-500 text-white px-4 py-2 rounded shadow">Añadir Vehículo</button>
+                            ` : ''}
+                        </div>
                     </div>
 
                     <div class="mb-4 grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg shadow">
                         <input type="text" placeholder="Filtrar por Marca" oninput="window.app.updateVehicleFilter('make', this.value)" value="${make}" class="border p-2 rounded"/>
                         <input type="text" placeholder="Filtrar por Modelo" oninput="window.app.updateVehicleFilter('model', this.value)" value="${model}" class="border p-2 rounded"/>
+                        <input type="number" placeholder="Días en stock >" oninput="window.app.updateVehicleFilter('daysInStock_greaterThan', this.value)" value="${state.filters.vehicles.daysInStock_greaterThan}" class="border p-2 rounded"/>
                         <div class="col-span-1 md:col-span-3">
                             <label class="block text-sm font-medium text-gray-700 mb-1">Filtrar por Estado:</label>
                             <div class="flex flex-wrap gap-x-4 gap-y-2">
@@ -391,10 +432,10 @@
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Marca/Modelo</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN/Precio</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
+                                    ${state.ui.visibleVehicleColumns.includes('make_model') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Marca/Modelo</th>` : ''}
+                                    ${state.ui.visibleVehicleColumns.includes('vin_price') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN/Precio</th>` : ''}
+                                    ${state.ui.visibleVehicleColumns.includes('status') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>` : ''}
+                                    ${state.ui.visibleVehicleColumns.includes('actions') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>` : ''}
                                 </tr>
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
@@ -942,6 +983,7 @@
                     <input name="model" value="${vehicle.model || ''}" placeholder="Modelo" class="border p-2 rounded w-full" />
                     <input name="trim" value="${vehicle.trim || ''}" placeholder="Nivel de Equipamiento (Trim)" class="border p-2 rounded w-full" />
                     <input name="vin" value="${vehicle.vin || ''}" placeholder="VIN" class="border p-2 rounded w-full" />
+                    <input name="color" value="${vehicle.color || ''}" placeholder="Color" class="border p-2 rounded w-full" />
                     <input name="price" type="number" value="${vehicle.price || ''}" placeholder="Precio" class="border p-2 rounded w-full" />
                     <input name="engine_specs" value="${vehicle.engine_specs || ''}" placeholder="Especificaciones del Motor" class="border p-2 rounded w-full" />
                     <input name="installed_options" value="${vehicle.installed_options || ''}" placeholder="Opciones Instaladas (separadas por coma)" class="border p-2 rounded w-full" />
@@ -1468,6 +1510,20 @@
                 if (page < 1 || page > totalPages) return;
 
                 state.pagination[collectionName].currentPage = page;
+                renderCurrentPage();
+            },
+            toggleTableDensity: () => {
+                state.ui.tableDensity = state.ui.tableDensity === 'default' ? 'compact' : 'default';
+                renderCurrentPage();
+            },
+            toggleVehicleColumn: (columnName) => {
+                const visibleColumns = new Set(state.ui.visibleVehicleColumns);
+                if (visibleColumns.has(columnName)) {
+                    visibleColumns.delete(columnName);
+                } else {
+                    visibleColumns.add(columnName);
+                }
+                state.ui.visibleVehicleColumns = Array.from(visibleColumns);
                 renderCurrentPage();
             },
             calculateAverageDaysInStock: () => {
