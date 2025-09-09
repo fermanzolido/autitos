@@ -24,7 +24,7 @@
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-auth.js";
         import {
             getFirestore, collection, onSnapshot, doc, addDoc,
-            updateDoc, deleteDoc, writeBatch, serverTimestamp, query, where
+            updateDoc, deleteDoc, writeBatch, serverTimestamp, query, where, arrayUnion
         } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-analytics.js";
 
@@ -70,6 +70,7 @@
                 availableVehicles: [],
                 interactions: [],
                 b2b_invoices: [],
+                forecasts: [],
             },
             collectionsLoading: {
                 vehicles: true,
@@ -79,9 +80,10 @@
                 availableVehicles: true,
                 interactions: true,
                 b2b_invoices: true,
+                forecasts: true,
             },
             filters: {
-                vehicles: { status: '', make: '', model: '' }
+                vehicles: { status: [], make: '', model: '' }
             },
             notification: { message: '', type: '' },
             isModalOpen: false,
@@ -160,6 +162,8 @@
                 { name: 'Vehículos', page: 'vehicles', roles: ['admin', 'factory', 'dealer'] },
                 { name: 'Concesionarios', page: 'dealers', roles: ['admin', 'factory'] },
                 { name: 'Facturación B2B', page: 'b2bInvoices', roles: ['admin', 'factory'] },
+                { name: 'Análisis BI', page: 'biDashboard', roles: ['admin', 'factory'] },
+                { name: 'Pronósticos', page: 'forecasts', roles: ['admin', 'factory'] },
                 { name: 'Clientes', page: 'customers', roles: ['admin', 'dealer'] },
                 { name: 'Ventas', page: 'sales', roles: ['admin', 'dealer'] },
                 { name: 'Pedidos de Fábrica', page: 'factoryOrders', roles: ['dealer'] },
@@ -208,6 +212,8 @@
                 reports: ReportsPageHTML,
                 factoryOrders: FactoryOrdersPageHTML,
                 b2bInvoices: B2BInvoicesPageHTML,
+                biDashboard: BIDashboardPageHTML,
+                forecasts: ForecastsPageHTML,
             };
 
             const renderFunc = pages[state.currentPage] || DashboardPageHTML;
@@ -215,6 +221,12 @@
             // Si la página es de reportes, renderizamos el gráfico después de que el HTML esté en el DOM
             if (state.currentPage === 'reports') {
                 appController.renderSalesReport();
+            }
+            if (state.currentPage === 'biDashboard') {
+                appController.renderBITopCharts();
+            }
+            if (state.currentPage === 'dashboard' && state.role === 'dealer') {
+                appController.renderDealerSalesChart();
             }
         }
 
@@ -257,15 +269,47 @@
                 vehiclesInStock: state.collections.vehicles.filter(v => v.status !== 'vendido').length,
                 totalSales: state.collections.sales.length,
                 totalDealers: state.collections.dealers.length,
+                avgDaysInStock: (state.role === 'admin' || state.role === 'factory') ? appController.calculateAverageDaysInStock() : 0,
             };
+
+            if (state.role === 'dealer') {
+                const dealer = state.collections.dealers.find(d => d.id === state.userClaims.dealerId);
+                stats.dealerAvgDaysInStock = appController.calculateAvgDaysInStockForDealer(dealer.id);
+                stats.territoryAvgDaysInStock = appController.calculateAvgDaysInStockForTerritory(dealer.territory);
+            }
+
              return `
                 <div>
                     <h1 class="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
                         <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Vehículos en Stock</h3><p class="text-4xl font-bold text-blue-600">${stats.vehiclesInStock}</p></div>
                         <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Ventas Totales</h3><p class="text-4xl font-bold text-green-600">${stats.totalSales}</p></div>
-                        <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Concesionarios</h3><p class="text-4xl font-bold text-purple-600">${stats.totalDealers}</p></div>
+
+                        ${(state.role === 'admin' || state.role === 'factory') ? `
+                            <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Concesionarios</h3><p class="text-4xl font-bold text-purple-600">${stats.totalDealers}</p></div>
+                            <div class="bg-white p-6 rounded-lg shadow-md">
+                                <h3 class="text-lg font-semibold">Días Promedio en Stock (Red)</h3>
+                                <p class="text-4xl font-bold text-orange-600">${stats.avgDaysInStock}</p>
+                            </div>
+                        ` : ''}
+
+                        ${(state.role === 'dealer') ? `
+                            <div class="bg-white p-6 rounded-lg shadow-md">
+                                <h3 class="text-lg font-semibold">Mis Días Promedio en Stock</h3>
+                                <p class="text-4xl font-bold text-indigo-600">${stats.dealerAvgDaysInStock}</p>
+                            </div>
+                             <div class="bg-white p-6 rounded-lg shadow-md">
+                                <h3 class="text-lg font-semibold">Días Promedio en Stock (Territorio)</h3>
+                                <p class="text-4xl font-bold text-gray-600">${stats.territoryAvgDaysInStock}</p>
+                            </div>
+                        ` : ''}
                     </div>
+                    ${(state.role === 'dealer') ? `
+                    <div class="mt-8 bg-white p-6 rounded-lg shadow-md">
+                        <h3 class="text-lg font-semibold mb-4">Mi Tendencia de Ventas (Últimos 6 meses)</h3>
+                        <canvas id="dealerSalesChart"></canvas>
+                    </div>
+                    ` : ''}
                 </div>`;
         }
 
@@ -274,7 +318,7 @@
             
             const { status, make, model } = state.filters.vehicles;
             const filteredVehicles = state.collections.vehicles.filter(v =>
-                (status ? v.status === status : true) &&
+                (status.length === 0 || status.includes(v.status)) &&
                 (make ? v.make.toLowerCase().includes(make.toLowerCase()) : true) &&
                 (model ? v.model.toLowerCase().includes(model.toLowerCase()) : true)
             );
@@ -327,14 +371,18 @@
                     <div class="mb-4 grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-lg shadow">
                         <input type="text" placeholder="Filtrar por Marca" oninput="window.app.updateVehicleFilter('make', this.value)" value="${make}" class="border p-2 rounded"/>
                         <input type="text" placeholder="Filtrar por Modelo" oninput="window.app.updateVehicleFilter('model', this.value)" value="${model}" class="border p-2 rounded"/>
-                        <select onchange="window.app.updateVehicleFilter('status', this.value)" class="border p-2 rounded">
-                            <option value="" ${status === '' ? 'selected' : ''}>Todos los Estados</option>
-                            <option value="enFabrica" ${status === 'enFabrica' ? 'selected' : ''}>En Fábrica</option>
-                            <option value="asignado" ${status === 'asignado' ? 'selected' : ''}>Asignado</option>
-                            <option value="enTransito" ${status === 'enTransito' ? 'selected' : ''}>En Tránsito</option>
-                            <option value="enConcesionario" ${status === 'enConcesionario' ? 'selected' : ''}>En Concesionario</option>
-                            <option value="vendido" ${status === 'vendido' ? 'selected' : ''}>Vendido</option>
-                        </select>
+                        <div class="col-span-1 md:col-span-3">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Filtrar por Estado:</label>
+                            <div class="flex flex-wrap gap-x-4 gap-y-2">
+                                ${['enFabrica', 'asignado', 'enTransito', 'enConcesionario', 'vendido'].map(s => `
+                                    <label class="inline-flex items-center">
+                                        <input type="checkbox" onchange="window.app.updateVehicleStatusFilter('${s}', this.checked)"
+                                               ${status.includes(s) ? 'checked' : ''} class="form-checkbox h-5 w-5 text-blue-600">
+                                        <span class="ml-2 text-gray-700">${s}</span>
+                                    </label>
+                                `).join('')}
+                            </div>
+                        </div>
                     </div>
 
                     <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
@@ -448,6 +496,72 @@
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
                         </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function ForecastsPageHTML() {
+            if (state.role !== 'admin' && state.role !== 'factory') {
+                return `<div class="p-4">Acceso denegado.</div>`;
+            }
+
+            const forecastsRows = state.collections.forecasts.sort((a, b) => a.month.localeCompare(b.month)).map(f => `
+                <tr key=${f.id}>
+                    <td class="px-6 py-4 whitespace-nowrap">${f.month}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${f.target}</td>
+                </tr>
+            `).join('');
+
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Gestión de Pronósticos de Ventas</h1>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div class="bg-white p-6 rounded-lg shadow-md">
+                            <h2 class="text-xl font-semibold mb-4">Añadir Nuevo Pronóstico</h2>
+                            <form onsubmit="window.app.handleSaveForecast(event)" class="space-y-4">
+                                <input type="month" name="month" class="border p-2 rounded w-full" required />
+                                <input type="number" name="target" placeholder="Objetivo de Ventas (unidades)" class="border p-2 rounded w-full" required />
+                                <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar Pronóstico</button>
+                            </form>
+                        </div>
+                        <div class="bg-white p-6 rounded-lg shadow-md">
+                             <h2 class="text-xl font-semibold mb-4">Pronósticos Guardados</h2>
+                             <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mes</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Objetivo</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">${forecastsRows}</tbody>
+                             </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function BIDashboardPageHTML() {
+             if (state.role !== 'admin' && state.role !== 'factory') {
+                return `<div class="p-4">Acceso denegado.</div>`;
+            }
+
+            // Placeholder for KPIs and charts
+            const turnoverRate = appController.calculateInventoryTurnoverRate();
+
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Análisis de Negocio (BI)</h1>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <div class="bg-white p-6 rounded-lg shadow-md">
+                            <h3 class="text-lg font-semibold">Tasa de Rotación de Inventario (Últimos 90 días)</h3>
+                            <p class="text-4xl font-bold text-teal-600">${turnoverRate}</p>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-md">
+                        <h3 class="text-lg font-semibold mb-4">Ventas por Territorio</h3>
+                        <canvas id="salesByTerritoryChart"></canvas>
                     </div>
                 </div>
             `;
@@ -891,6 +1005,16 @@
                 state.filters.vehicles[key] = value;
                 renderCurrentPage();
             },
+            updateVehicleStatusFilter: (status, isChecked) => {
+                const statusSet = new Set(state.filters.vehicles.status);
+                if (isChecked) {
+                    statusSet.add(status);
+                } else {
+                    statusSet.delete(status);
+                }
+                state.filters.vehicles.status = Array.from(statusSet);
+                renderCurrentPage();
+            },
             handleSaveVehicle: async (e, vehicleId) => {
                  e.preventDefault();
                  const formData = new FormData(e.target);
@@ -908,7 +1032,16 @@
                  try {
                      if (vehicleId) {
                         const oldVehicleData = state.collections.vehicles.find(v => v.id === vehicleId);
-                        if (vehicleData.status === 'enConcesionario' && oldVehicleData.status !== 'enConcesionario' && oldVehicleData.dealerId) {
+                        const updatedData = { ...vehicleData };
+
+                        if (updatedData.status !== oldVehicleData.status) {
+                            updatedData.statusHistory = arrayUnion({
+                                status: updatedData.status,
+                                date: serverTimestamp()
+                            });
+                        }
+
+                        if (updatedData.status === 'enConcesionario' && oldVehicleData.status !== 'enConcesionario' && oldVehicleData.dealerId) {
                             const invoiceData = {
                                 vehicleId: vehicleId,
                                 dealerId: oldVehicleData.dealerId,
@@ -920,10 +1053,14 @@
                             await addDoc(collection(db, 'b2b_invoices'), invoiceData);
                             appController.setNotification({ type: 'success', message: 'Factura B2B generada.' });
                         }
-                         await updateDoc(doc(db, 'vehicles', vehicleId), vehicleData);
+                         await updateDoc(doc(db, 'vehicles', vehicleId), updatedData);
                          appController.setNotification({ type: 'success', message: 'Vehículo actualizado.' });
                      } else {
-                         await addDoc(collection(db, 'vehicles'), vehicleData);
+                        const newVehicleData = {
+                             ...vehicleData,
+                             statusHistory: [{ status: vehicleData.status, date: serverTimestamp() }]
+                         };
+                         await addDoc(collection(db, 'vehicles'), newVehicleData);
                          appController.setNotification({ type: 'success', message: 'Vehículo creado.' });
                      }
                      appController.closeModal();
@@ -1210,6 +1347,190 @@
                 state.pagination[collectionName].currentPage = page;
                 renderCurrentPage();
             },
+            calculateAverageDaysInStock: () => {
+                const soldVehicles = state.collections.vehicles.filter(v => v.status === 'vendido');
+                if (!soldVehicles.length) return 0;
+
+                let totalDays = 0;
+                let count = 0;
+
+                soldVehicles.forEach(vehicle => {
+                    if (!vehicle.statusHistory) return;
+
+                    const arrivalEntry = vehicle.statusHistory.find(h => h.status === 'enConcesionario');
+                    const saleEntry = vehicle.statusHistory.find(h => h.status === 'vendido');
+
+                    if (arrivalEntry && saleEntry && arrivalEntry.date && saleEntry.date) {
+                        const arrivalDate = arrivalEntry.date.toDate();
+                        const saleDate = saleEntry.date.toDate();
+                        const diffTime = Math.abs(saleDate - arrivalDate);
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        totalDays += diffDays;
+                        count++;
+                    }
+                });
+
+                return count > 0 ? (totalDays / count).toFixed(1) : 0;
+            },
+            calculateAvgDaysInStockForDealer: (dealerId) => {
+                const soldVehicles = state.collections.sales
+                    .filter(s => s.dealerId === dealerId)
+                    .map(s => state.collections.vehicles.find(v => v.id === s.vehicleId && v.status === 'vendido'))
+                    .filter(Boolean);
+
+                if (!soldVehicles.length) return 0;
+                // This can reuse the main logic, but for clarity, it's separated.
+                let totalDays = 0;
+                let count = 0;
+                soldVehicles.forEach(vehicle => {
+                    if (!vehicle.statusHistory) return;
+                    const arrivalEntry = vehicle.statusHistory.find(h => h.status === 'enConcesionario');
+                    const saleEntry = vehicle.statusHistory.find(h => h.status === 'vendido');
+                    if (arrivalEntry && saleEntry && arrivalEntry.date && saleEntry.date) {
+                        totalDays += Math.ceil(Math.abs(saleEntry.date.toDate() - arrivalEntry.date.toDate()) / (1000 * 60 * 60 * 24));
+                        count++;
+                    }
+                });
+                return count > 0 ? (totalDays / count).toFixed(1) : 0;
+            },
+            calculateAvgDaysInStockForTerritory: (territory) => {
+                const dealersInTerritory = state.collections.dealers.filter(d => d.territory === territory).map(d => d.id);
+                const soldVehicles = state.collections.sales
+                    .filter(s => dealersInTerritory.includes(s.dealerId))
+                    .map(s => state.collections.vehicles.find(v => v.id === s.vehicleId && v.status === 'vendido'))
+                    .filter(Boolean);
+
+                if (!soldVehicles.length) return 0;
+                let totalDays = 0;
+                let count = 0;
+                 soldVehicles.forEach(vehicle => {
+                    if (!vehicle.statusHistory) return;
+                    const arrivalEntry = vehicle.statusHistory.find(h => h.status === 'enConcesionario');
+                    const saleEntry = vehicle.statusHistory.find(h => h.status === 'vendido');
+                    if (arrivalEntry && saleEntry && arrivalEntry.date && saleEntry.date) {
+                        totalDays += Math.ceil(Math.abs(saleEntry.date.toDate() - arrivalEntry.date.toDate()) / (1000 * 60 * 60 * 24));
+                        count++;
+                    }
+                });
+                return count > 0 ? (totalDays / count).toFixed(1) : 0;
+            },
+            calculateInventoryTurnoverRate: () => {
+                const ninetyDaysAgo = new Date();
+                ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+                const salesInPeriod = state.collections.sales.filter(s => s.saleDate && s.saleDate.toDate() > ninetyDaysAgo).length;
+                const currentStock = state.collections.vehicles.filter(v => v.status !== 'vendido').length;
+
+                if (currentStock === 0) return 'N/A';
+                return (salesInPeriod / currentStock).toFixed(2);
+            },
+            calculateSalesByTerritory: () => {
+                const salesByTerritory = state.collections.sales.reduce((acc, sale) => {
+                    const dealer = state.collections.dealers.find(d => d.id === sale.dealerId);
+                    if (dealer && dealer.territory) {
+                        acc[dealer.territory] = (acc[dealer.territory] || 0) + 1;
+                    }
+                    return acc;
+                }, {});
+                return salesByTerritory;
+            },
+            renderBITopCharts: () => {
+                const salesByTerritoryData = appController.calculateSalesByTerritory();
+                const labels = Object.keys(salesByTerritoryData);
+                const data = Object.values(salesByTerritoryData);
+
+                const ctx = document.getElementById('salesByTerritoryChart');
+                if (!ctx) return;
+
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Ventas Totales',
+                            data: data,
+                            backgroundColor: 'rgba(22, 163, 74, 0.6)',
+                            borderColor: 'rgba(22, 163, 74, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            },
+            renderDealerSalesChart: () => {
+                const sixMonthsAgo = new Date();
+                sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+                const dealerSales = state.collections.sales.filter(s =>
+                    s.dealerId === state.userClaims.dealerId &&
+                    s.saleDate &&
+                    s.saleDate.toDate() > sixMonthsAgo
+                );
+
+                const salesByMonth = dealerSales.reduce((acc, sale) => {
+                    const month = sale.saleDate.toDate().toISOString().slice(0, 7); // YYYY-MM
+                    acc[month] = (acc[month] || 0) + 1;
+                    return acc;
+                }, {});
+
+                // Ensure all 6 months are present, even if sales are zero
+                const labels = [];
+                for (let i = 5; i >= 0; i--) {
+                    const d = new Date();
+                    d.setMonth(d.getMonth() - i);
+                    labels.push(d.toISOString().slice(0, 7));
+                }
+
+                const data = labels.map(label => salesByMonth[label] || 0);
+
+                const ctx = document.getElementById('dealerSalesChart');
+                if (!ctx) return;
+
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Mis Ventas',
+                            data: data,
+                            borderColor: 'rgba(79, 70, 229, 1)',
+                            backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                            fill: true,
+                            tension: 0.1
+                        }]
+                    },
+                });
+            },
+            handleSaveForecast: async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const forecastData = {
+                    month: formData.get('month'),
+                    target: Number(formData.get('target')),
+                };
+
+                if (!forecastData.month || !forecastData.target) {
+                    appController.setNotification({ type: 'error', message: 'Mes y objetivo son requeridos.' });
+                    return;
+                }
+
+                try {
+                    // Firestore doesn't have a concept of primary key on a field, so we just add it.
+                    // A more robust solution would use a transaction to check if a forecast for that month already exists.
+                    await addDoc(collection(db, 'forecasts'), forecastData);
+                    appController.setNotification({ type: 'success', message: 'Pronóstico guardado.' });
+                    e.target.reset();
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: 'Error al guardar el pronóstico.' });
+                    console.error(error);
+                }
+            },
         };
 
         // --- INICIALIZACIÓN Y SUSCRIPCIONES ---
@@ -1234,7 +1555,7 @@
             firestoreUnsubscribers.forEach(unsub => unsub());
             firestoreUnsubscribers = [];
 
-            const collectionsToWatch = ['dealers', 'customers', 'sales', 'b2b_invoices'];
+            const collectionsToWatch = ['dealers', 'customers', 'sales', 'b2b_invoices', 'forecasts'];
             
             collectionsToWatch.forEach(name => {
                 const unsub = onSnapshot(collection(db, name), snapshot => {
