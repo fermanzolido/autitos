@@ -337,7 +337,7 @@
 
             const tableRows = paginatedVehicles.map(v => `
                 <tr key=${v.id}>
-                    <td class="px-6 py-4">${v.make} ${v.model}</td>
+                    <td class="px-6 py-4">${v.make} ${v.model} ${v.trim || ''}</td>
                     <td class="px-6 py-4">${v.vin}<br/>$${(v.price || 0).toLocaleString()}</td>
                     <td class="px-6 py-4">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadge(v.status)}">
@@ -374,7 +374,7 @@
                         <div class="col-span-1 md:col-span-3">
                             <label class="block text-sm font-medium text-gray-700 mb-1">Filtrar por Estado:</label>
                             <div class="flex flex-wrap gap-x-4 gap-y-2">
-                                ${['enFabrica', 'asignado', 'enTransito', 'enConcesionario', 'vendido'].map(s => `
+                                ${['enFabrica', 'asignado', 'enPuerto', 'enTransito', 'enConcesionario', 'vendido'].map(s => `
                                     <label class="inline-flex items-center">
                                         <input type="checkbox" onchange="window.app.updateVehicleStatusFilter('${s}', this.checked)"
                                                ${status.includes(s) ? 'checked' : ''} class="form-checkbox h-5 w-5 text-blue-600">
@@ -863,11 +863,20 @@
                 <form onsubmit="window.app.handleSaveVehicle(event, '${vehicle.id || ''}')" class="space-y-4">
                     <input name="make" value="${vehicle.make || ''}" placeholder="Marca" class="border p-2 rounded w-full" />
                     <input name="model" value="${vehicle.model || ''}" placeholder="Modelo" class="border p-2 rounded w-full" />
+                    <input name="trim" value="${vehicle.trim || ''}" placeholder="Nivel de Equipamiento (Trim)" class="border p-2 rounded w-full" />
                     <input name="vin" value="${vehicle.vin || ''}" placeholder="VIN" class="border p-2 rounded w-full" />
                     <input name="price" type="number" value="${vehicle.price || ''}" placeholder="Precio" class="border p-2 rounded w-full" />
+                    <input name="engine_specs" value="${vehicle.engine_specs || ''}" placeholder="Especificaciones del Motor" class="border p-2 rounded w-full" />
+                    <input name="installed_options" value="${vehicle.installed_options || ''}" placeholder="Opciones Instaladas (separadas por coma)" class="border p-2 rounded w-full" />
+                    <input name="color_codes" value="${vehicle.color_codes || ''}" placeholder="Códigos de Color" class="border p-2 rounded w-full" />
+                    <div class="flex flex-col">
+                        <label for="fabrication_date" class="text-sm text-gray-600">Fecha de Fabricación</label>
+                        <input name="fabrication_date" type="date" value="${vehicle.fabrication_date || ''}" class="border p-2 rounded w-full" />
+                    </div>
                     <select name="status" class="border p-2 rounded w-full">
                         <option value="enFabrica" ${vehicle.status === 'enFabrica' ? 'selected' : ''}>En Fábrica</option>
                         <option value="asignado" ${vehicle.status === 'asignado' ? 'selected' : ''}>Asignado</option>
+                        <option value="enPuerto" ${vehicle.status === 'enPuerto' ? 'selected' : ''}>En Puerto</option>
                         <option value="enTransito" ${vehicle.status === 'enTransito' ? 'selected' : ''}>En Tránsito</option>
                         <option value="enConcesionario" ${vehicle.status === 'enConcesionario' ? 'selected' : ''}>En Concesionario</option>
                         <option value="vendido" ${vehicle.status === 'vendido' ? 'selected' : ''}>Vendido</option>
@@ -1020,6 +1029,9 @@
                  const formData = new FormData(e.target);
                  const vehicleData = Object.fromEntries(formData.entries());
                  vehicleData.price = Number(vehicleData.price);
+                 if (vehicleData.fabrication_date) {
+                    vehicleData.fabrication_date = new Date(vehicleData.fabrication_date);
+                 }
 
                  if (!vehicleId) { // Solo validar VIN para vehículos nuevos
                     const vinExists = state.collections.vehicles.some(v => v.vin === vehicleData.vin);
@@ -1233,7 +1245,11 @@
                     });
 
                     const vehicleRef = doc(db, 'vehicles', data.vehicleId);
-                    batch.update(vehicleRef, { status: 'vendido' });
+                    batch.update(vehicleRef, {
+                        status: 'vendido',
+                        final_delivery_date: serverTimestamp(),
+                        statusHistory: arrayUnion({ status: 'vendido', date: serverTimestamp() }),
+                    });
 
                     await batch.commit();
                     appController.setNotification({ type: 'success', message: 'Venta registrada con éxito.' });
