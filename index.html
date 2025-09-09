@@ -69,6 +69,7 @@
                 sales: [],
                 availableVehicles: [],
                 interactions: [],
+                b2b_invoices: [],
             },
             collectionsLoading: {
                 vehicles: true,
@@ -77,6 +78,7 @@
                 sales: true,
                 availableVehicles: true,
                 interactions: true,
+                b2b_invoices: true,
             },
             filters: {
                 vehicles: { status: '', make: '', model: '' }
@@ -157,8 +159,10 @@
                 { name: 'Dashboard', page: 'dashboard', roles: ['admin', 'factory', 'dealer'] },
                 { name: 'Vehículos', page: 'vehicles', roles: ['admin', 'factory', 'dealer'] },
                 { name: 'Concesionarios', page: 'dealers', roles: ['admin', 'factory'] },
+                { name: 'Facturación B2B', page: 'b2bInvoices', roles: ['admin', 'factory'] },
                 { name: 'Clientes', page: 'customers', roles: ['admin', 'dealer'] },
                 { name: 'Ventas', page: 'sales', roles: ['admin', 'dealer'] },
+                { name: 'Pedidos de Fábrica', page: 'factoryOrders', roles: ['dealer'] },
                 { name: 'Reportes', page: 'reports', roles: ['admin'] },
             ];
 
@@ -202,6 +206,8 @@
                 customers: CustomersPageHTML,
                 sales: SalesPageHTML,
                 reports: ReportsPageHTML,
+                factoryOrders: FactoryOrdersPageHTML,
+                b2bInvoices: B2BInvoicesPageHTML,
             };
 
             const renderFunc = pages[state.currentPage] || DashboardPageHTML;
@@ -324,6 +330,7 @@
                         <select onchange="window.app.updateVehicleFilter('status', this.value)" class="border p-2 rounded">
                             <option value="" ${status === '' ? 'selected' : ''}>Todos los Estados</option>
                             <option value="enFabrica" ${status === 'enFabrica' ? 'selected' : ''}>En Fábrica</option>
+                            <option value="asignado" ${status === 'asignado' ? 'selected' : ''}>Asignado</option>
                             <option value="enTransito" ${status === 'enTransito' ? 'selected' : ''}>En Tránsito</option>
                             <option value="enConcesionario" ${status === 'enConcesionario' ? 'selected' : ''}>En Concesionario</option>
                             <option value="vendido" ${status === 'vendido' ? 'selected' : ''}>Vendido</option>
@@ -360,6 +367,7 @@
                     <td class="px-6 py-4 whitespace-nowrap">${d.name}</td>
                     <td class="px-6 py-4 whitespace-nowrap">${d.address}</td>
                     <td class="px-6 py-4 whitespace-nowrap">${d.territory}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">$${(d.creditLine || 0).toLocaleString()}</td>
                     ${state.role === 'admin' ? `
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                             <button onclick="window.app.openDealerModal('${d.id}')" class="text-indigo-600 hover:text-indigo-900">Editar</button>
@@ -384,6 +392,7 @@
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nombre</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Dirección</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Territorio</th>
+                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Línea de Crédito</th>
                                     ${state.role === 'admin' ? '<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>' : ''}
                                 </tr>
                             </thead>
@@ -435,6 +444,92 @@
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Teléfono</th>
                                     ${state.role === 'admin' ? '<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>' : ''}
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function B2BInvoicesPageHTML() {
+            if (state.collectionsLoading.b2b_invoices || state.collectionsLoading.vehicles || state.collectionsLoading.dealers) return SpinnerHTML();
+            if (state.role !== 'admin' && state.role !== 'factory') {
+                return `<div class="p-4">Acceso denegado.</div>`;
+            }
+
+            const tableRows = state.collections.b2b_invoices.map(invoice => {
+                const vehicle = state.collections.vehicles.find(v => v.id === invoice.vehicleId);
+                const dealer = state.collections.dealers.find(d => d.id === invoice.dealerId);
+                return `
+                    <tr key=${invoice.id}>
+                        <td class="px-6 py-4 whitespace-nowrap">${invoice.date ? invoice.date.toDate().toLocaleDateString() : 'N/A'}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${dealer ? dealer.name : 'N/A'}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${vehicle ? `${vehicle.make} ${vehicle.model}` : 'N/A'}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">$${(invoice.price || 0).toLocaleString()}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${invoice.status}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            ${invoice.documentURL ? `<a href="${invoice.documentURL}" target="_blank" class="text-blue-600 hover:underline">Ver Documento</a>` : 'N/A'}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Facturación B2B</h1>
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Concesionario</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vehículo</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monto</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
+                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function FactoryOrdersPageHTML() {
+            if (state.collectionsLoading.vehicles) return SpinnerHTML();
+            if (state.role !== 'dealer') {
+                return `<div class="p-4">Acceso denegado.</div>`;
+            }
+
+            const assignedVehicles = state.collections.vehicles.filter(v => v.status === 'asignado' && v.dealerId === state.userClaims.dealerId);
+
+            const tableRows = assignedVehicles.map(v => `
+                <tr key=${v.id}>
+                    <td class="px-6 py-4 whitespace-nowrap">${v.make} ${v.model}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${v.vin}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">$${(v.price || 0).toLocaleString()}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button onclick="window.app.handleConfirmOrder('${v.id}')" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
+                            Confirmar Pedido
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Pedidos de Fábrica</h1>
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vehículo</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Precio</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
                                 </tr>
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
@@ -658,6 +753,7 @@
                     <input name="price" type="number" value="${vehicle.price || ''}" placeholder="Precio" class="border p-2 rounded w-full" />
                     <select name="status" class="border p-2 rounded w-full">
                         <option value="enFabrica" ${vehicle.status === 'enFabrica' ? 'selected' : ''}>En Fábrica</option>
+                        <option value="asignado" ${vehicle.status === 'asignado' ? 'selected' : ''}>Asignado</option>
                         <option value="enTransito" ${vehicle.status === 'enTransito' ? 'selected' : ''}>En Tránsito</option>
                         <option value="enConcesionario" ${vehicle.status === 'enConcesionario' ? 'selected' : ''}>En Concesionario</option>
                         <option value="vendido" ${vehicle.status === 'vendido' ? 'selected' : ''}>Vendido</option>
@@ -675,6 +771,7 @@
                     <input name="name" value="${dealer.name || ''}" placeholder="Nombre" class="border p-2 rounded w-full" />
                     <input name="address" value="${dealer.address || ''}" placeholder="Dirección" class="border p-2 rounded w-full" />
                     <input name="territory" value="${dealer.territory || ''}" placeholder="Territorio" class="border p-2 rounded w-full" />
+                    <input name="creditLine" type="number" value="${dealer.creditLine || ''}" placeholder="Línea de Crédito" class="border p-2 rounded w-full" />
                     <div class="flex justify-end gap-4">
                         <button type="button" onclick="window.app.closeModal()" class="bg-gray-500 text-white px-4 py-2 rounded">Cancelar</button>
                         <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar</button>
@@ -810,6 +907,19 @@
                 
                  try {
                      if (vehicleId) {
+                        const oldVehicleData = state.collections.vehicles.find(v => v.id === vehicleId);
+                        if (vehicleData.status === 'enConcesionario' && oldVehicleData.status !== 'enConcesionario' && oldVehicleData.dealerId) {
+                            const invoiceData = {
+                                vehicleId: vehicleId,
+                                dealerId: oldVehicleData.dealerId,
+                                price: oldVehicleData.price,
+                                date: serverTimestamp(),
+                                status: 'pendiente', // o 'pagada'
+                                 documentURL: '', // Placeholder for document URL
+                            };
+                            await addDoc(collection(db, 'b2b_invoices'), invoiceData);
+                            appController.setNotification({ type: 'success', message: 'Factura B2B generada.' });
+                        }
                          await updateDoc(doc(db, 'vehicles', vehicleId), vehicleData);
                          appController.setNotification({ type: 'success', message: 'Vehículo actualizado.' });
                      } else {
@@ -844,6 +954,7 @@
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 const dealerData = Object.fromEntries(formData.entries());
+                dealerData.creditLine = Number(dealerData.creditLine);
                 
                 try {
                     if (dealerId) {
@@ -918,6 +1029,17 @@
                 } catch (error) {
                     appController.setNotification({ type: 'error', message: 'Error al guardar la interacción.' });
                     console.error(error);
+                }
+            },
+            handleConfirmOrder: async (vehicleId) => {
+                if (confirm('¿Estás seguro de que quieres confirmar este pedido? El vehículo pasará a estado "En Tránsito".')) {
+                    try {
+                        await updateDoc(doc(db, 'vehicles', vehicleId), { status: 'enTransito' });
+                        appController.setNotification({ type: 'success', message: 'Pedido confirmado.' });
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: 'Error al confirmar el pedido.' });
+                        console.error(error);
+                    }
                 }
             },
             toggleNewCustomerSale: (isChecked) => {
@@ -1112,7 +1234,7 @@
             firestoreUnsubscribers.forEach(unsub => unsub());
             firestoreUnsubscribers = [];
 
-            const collectionsToWatch = ['dealers', 'customers', 'sales'];
+            const collectionsToWatch = ['dealers', 'customers', 'sales', 'b2b_invoices'];
             
             collectionsToWatch.forEach(name => {
                 const unsub = onSnapshot(collection(db, name), snapshot => {
