@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistema de Gestión de Concesionarios</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* Estilo para una transición suave al mostrar/ocultar elementos */
         .fade-in { animation: fadeIn 0.3s ease-in-out; }
@@ -151,6 +152,7 @@
                 { name: 'Concesionarios', page: 'dealers', roles: ['admin', 'factory'] },
                 { name: 'Clientes', page: 'customers', roles: ['admin', 'dealer'] },
                 { name: 'Ventas', page: 'sales', roles: ['admin', 'dealer'] },
+                { name: 'Reportes', page: 'reports', roles: ['admin'] },
             ];
 
             const sidebar = `
@@ -192,13 +194,50 @@
                 dealers: DealersPageHTML,
                 customers: CustomersPageHTML,
                 sales: SalesPageHTML,
+                reports: ReportsPageHTML,
             };
 
             const renderFunc = pages[state.currentPage] || DashboardPageHTML;
             pageContent.innerHTML = renderFunc();
+            // Si la página es de reportes, renderizamos el gráfico después de que el HTML esté en el DOM
+            if (state.currentPage === 'reports') {
+                appController.renderSalesReport();
+            }
         }
 
         // --- HTML PARA CADA PÁGINA ---
+
+        function ReportsPageHTML() {
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Reportes y Analíticas</h1>
+
+                    <div class="bg-white p-6 rounded-lg shadow mb-8">
+                        <h2 class="text-xl font-semibold mb-4">Ventas</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                            <input type="date" id="startDate" class="p-2 border rounded" onchange="window.app.renderSalesReport()">
+                            <input type="date" id="endDate" class="p-2 border rounded" onchange="window.app.renderSalesReport()">
+                        </div>
+                        <canvas id="salesChart"></canvas>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h2 class="text-xl font-semibold mb-4">Exportar Datos</h2>
+                        <div class="flex space-x-4">
+                            <button onclick="window.app.exportToCSV(state.collections.vehicles, 'vehiculos.csv')" class="bg-gray-600 hover:bg-gray-800 text-white font-bold py-2 px-4 rounded">
+                                Exportar Vehículos (CSV)
+                            </button>
+                            <button onclick="window.app.exportToCSV(state.collections.sales, 'ventas.csv')" class="bg-gray-600 hover:bg-gray-800 text-white font-bold py-2 px-4 rounded">
+                                Exportar Ventas (CSV)
+                            </button>
+                            <button onclick="window.app.exportToCSV(state.collections.customers, 'clientes.csv')" class="bg-gray-600 hover:bg-gray-800 text-white font-bold py-2 px-4 rounded">
+                                Exportar Clientes (CSV)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
 
         function DashboardPageHTML() {
             const stats = {
@@ -547,6 +586,7 @@
         }
         
         // --- LÓGICA DE LA APLICACIÓN (Controladores) ---
+        let salesChartInstance = null;
         const appController = {
             
             // --- Autenticación ---
@@ -777,6 +817,97 @@
                 } catch (error) {
                     appController.setNotification({ type: 'error', message: 'Error al registrar la venta.' });
                     console.error("Error registrando venta:", error);
+                }
+            },
+
+            renderSalesReport: () => {
+                const sales = state.collections.sales;
+                if (!sales.length) return;
+
+                const startDateInput = document.getElementById('startDate');
+                const endDateInput = document.getElementById('endDate');
+
+                if(!startDateInput || !endDateInput) return;
+
+                const startDate = startDateInput.value;
+                const endDate = endDateInput.value;
+
+                const filteredSales = sales.filter(s => {
+                    if (!s.saleDate) return false;
+                    const saleDate = s.saleDate.toDate();
+                    if (startDate && saleDate < new Date(startDate)) return false;
+                    if (endDate && saleDate > new Date(endDate)) return false;
+                    return true;
+                });
+
+                const salesByMonth = filteredSales.reduce((acc, sale) => {
+                    if (!sale.saleDate) return acc;
+                    const month = sale.saleDate.toDate().toISOString().slice(0, 7); // YYYY-MM
+                    acc[month] = (acc[month] || 0) + 1;
+                    return acc;
+                }, {});
+
+                const labels = Object.keys(salesByMonth).sort();
+                const data = labels.map(label => salesByMonth[label]);
+
+                const ctx = document.getElementById('salesChart');
+                if (!ctx) return;
+
+                if (salesChartInstance) {
+                    salesChartInstance.destroy();
+                }
+
+                salesChartInstance = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Número de Ventas',
+                            data: data,
+                            backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            },
+
+            exportToCSV: (data, filename) => {
+                if (!data.length) {
+                    appController.setNotification({ type: 'error', message: 'No hay datos para exportar.' });
+                    return;
+                }
+
+                const replacer = (key, value) => value === null ? '' : value;
+                const header = Object.keys(data[0]);
+                let csv = data.map(row => header.map(fieldName => {
+                    let fieldValue = row[fieldName];
+                    // Si el valor es un objeto (como un Timestamp de Firebase), lo convertimos a string
+                    if (typeof fieldValue === 'object' && fieldValue !== null && fieldValue.toDate) {
+                        fieldValue = fieldValue.toDate().toLocaleString();
+                    }
+                    return JSON.stringify(fieldValue, replacer);
+                }).join(','));
+                csv.unshift(header.join(','));
+                csv = csv.join('\r\n');
+
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                if (link.download !== undefined) {
+                    const url = URL.createObjectURL(blob);
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', filename);
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
                 }
             },
         };
