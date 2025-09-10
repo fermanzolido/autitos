@@ -87,7 +87,7 @@
                 factory_orders: true,
             },
             filters: {
-                vehicles: { status: [], make: '', model: '', daysInStock_greaterThan: '' }
+                vehicles: { status: [], make: '', model: '', daysInStock_greaterThan: '', sortBy: { key: 'make', order: 'asc' } }
             },
             notification: { message: '', type: '' },
             isModalOpen: false,
@@ -341,25 +341,37 @@
         function VehiclesPageHTML() {
             if (state.collectionsLoading.vehicles) return SpinnerHTML();
             
-            const { status, make, model, daysInStock_greaterThan } = state.filters.vehicles;
-            const filteredVehicles = state.collections.vehicles.filter(v => {
+            const { status, make, model, daysInStock_greaterThan, sortBy } = state.filters.vehicles;
+            let filteredVehicles = state.collections.vehicles.filter(v => {
                 const statusMatch = status.length === 0 || status.includes(v.status);
                 const makeMatch = make ? v.make.toLowerCase().includes(make.toLowerCase()) : true;
                 const modelMatch = model ? v.model.toLowerCase().includes(model.toLowerCase()) : true;
 
                 let daysInStockMatch = true;
                 if (daysInStock_greaterThan && v.statusHistory && v.status !== 'vendido') {
-                    // This is a client-side calculation and can be slow on very large datasets.
-                    // It calculates days since the *last* status change.
-                    const lastStatusUpdate = v.statusHistory[v.statusHistory.length - 1].date.toDate();
-                    const now = new Date();
-                    const diffTime = Math.abs(now - lastStatusUpdate);
-                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                    daysInStockMatch = diffDays > Number(daysInStock_greaterThan);
+                    const lastStatusUpdate = v.statusHistory.find(h => h.status === 'enConcesionario')?.date.toDate();
+                    if(lastStatusUpdate) {
+                        const now = new Date();
+                        const diffTime = Math.abs(now - lastStatusUpdate);
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        daysInStockMatch = diffDays > Number(daysInStock_greaterThan);
+                    }
                 }
 
                 return statusMatch && makeMatch && modelMatch && daysInStockMatch;
             });
+
+            // Sorting logic
+            if (sortBy.key) {
+                filteredVehicles.sort((a, b) => {
+                    const valA = a[sortBy.key];
+                    const valB = b[sortBy.key];
+
+                    if (valA < valB) return sortBy.order === 'asc' ? -1 : 1;
+                    if (valA > valB) return sortBy.order === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            }
 
             const { currentPage, itemsPerPage } = state.pagination.vehicles;
             const paginatedVehicles = filteredVehicles.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -368,6 +380,7 @@
                 const styles = {
                     vendido: 'bg-red-100 text-red-800',
                     enConcesionario: 'bg-green-100 text-green-800',
+                    reservado: 'bg-blue-100 text-blue-800',
                     default: 'bg-yellow-100 text-yellow-800'
                 };
                 return styles[vehicleStatus] || styles.default;
@@ -402,6 +415,11 @@
                         ${(state.role === 'dealer' && v.status === 'enTransito') ? `
                             <button onclick="window.app.handleReceiveVehicle('${v.id}')" class="bg-green-500 hover:bg-green-700 text-white font-bold py-1 px-2 rounded text-xs">
                                 Recibir Vehículo
+                            </button>
+                        ` : ''}
+                        ${(state.role === 'dealer' && v.status === 'enConcesionario') ? `
+                            <button onclick="window.app.handleReserveVehicle('${v.id}')" class="bg-yellow-500 hover:bg-yellow-700 text-white font-bold py-1 px-2 rounded text-xs">
+                                Reservar
                             </button>
                         ` : ''}
                         ${(state.role === 'dealer' && v.status !== 'asignado' && v.status !== 'enTransito') ? `<span class="text-gray-500">Sin acciones</span>` : ''}
@@ -446,7 +464,7 @@
                         <div class="col-span-1 md:col-span-3">
                             <label class="block text-sm font-medium text-gray-700 mb-1">Filtrar por Estado:</label>
                             <div class="flex flex-wrap gap-x-4 gap-y-2">
-                                ${['enFabrica', 'asignado', 'enPuerto', 'enTransito', 'enConcesionario', 'vendido'].map(s => `
+                                ${['enFabrica', 'asignado', 'enPuerto', 'enTransito', 'enConcesionario', 'reservado', 'vendido'].map(s => `
                                     <label class="inline-flex items-center">
                                         <input type="checkbox" onchange="window.app.updateVehicleStatusFilter('${s}', this.checked)"
                                                ${status.includes(s) ? 'checked' : ''} class="form-checkbox h-5 w-5 text-blue-600">
@@ -461,9 +479,9 @@
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    ${state.ui.visibleVehicleColumns.includes('make_model') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Marca/Modelo</th>` : ''}
-                                    ${state.ui.visibleVehicleColumns.includes('vin_price') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN/Precio</th>` : ''}
-                                    ${state.ui.visibleVehicleColumns.includes('status') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>` : ''}
+                                    ${state.ui.visibleVehicleColumns.includes('make_model') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer" onclick="window.app.handleSortVehicles('make')">Marca/Modelo ${sortBy.key === 'make' ? (sortBy.order === 'asc' ? '↑' : '↓') : ''}</th>` : ''}
+                                    ${state.ui.visibleVehicleColumns.includes('vin_price') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer" onclick="window.app.handleSortVehicles('price')">VIN/Precio ${sortBy.key === 'price' ? (sortBy.order === 'asc' ? '↑' : '↓') : ''}</th>` : ''}
+                                    ${state.ui.visibleVehicleColumns.includes('status') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer" onclick="window.app.handleSortVehicles('status')">Estado ${sortBy.key === 'status' ? (sortBy.order === 'asc' ? '↑' : '↓') : ''}</th>` : ''}
                                     ${state.ui.visibleVehicleColumns.includes('actions') ? `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>` : ''}
                                 </tr>
                             </thead>
@@ -1258,6 +1276,26 @@
                 }
                 state.filters.vehicles.status = Array.from(statusSet);
                 renderCurrentPage();
+            },
+            handleSortVehicles: (key) => {
+                if (state.filters.vehicles.sortBy.key === key) {
+                    state.filters.vehicles.sortBy.order = state.filters.vehicles.sortBy.order === 'asc' ? 'desc' : 'asc';
+                } else {
+                    state.filters.vehicles.sortBy = { key, order: 'asc' };
+                }
+                renderCurrentPage();
+            },
+            handleReserveVehicle: async (vehicleId) => {
+                if (confirm('¿Estás seguro de que quieres reservar este vehículo?')) {
+                    const updateVehicleStatus = httpsCallable(functions, 'updateVehicleStatus');
+                    try {
+                        const result = await updateVehicleStatus({ vehicleId, newStatus: 'reservado' });
+                        appController.setNotification({ type: 'success', message: result.data.message });
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
+                        console.error(error);
+                    }
+                }
             },
             handleSaveVehicle: async (e, vehicleId) => {
                 e.preventDefault();
