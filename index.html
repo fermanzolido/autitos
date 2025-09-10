@@ -472,6 +472,7 @@
                     <td class="px-6 py-4 whitespace-nowrap">${d.address}</td>
                     <td class="px-6 py-4 whitespace-nowrap">${d.territory}</td>
                     <td class="px-6 py-4 whitespace-nowrap">$${(d.creditLine || 0).toLocaleString()}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">$${(d.availableCredit || 0).toLocaleString()}</td>
                     ${state.role === 'admin' ? `
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                             <button onclick="window.app.openDealerModal('${d.id}')" class="text-indigo-600 hover:text-indigo-900">Editar</button>
@@ -497,6 +498,7 @@
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Dirección</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Territorio</th>
                                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Línea de Crédito</th>
+                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Crédito Disponible</th>
                                     ${state.role === 'admin' ? '<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>' : ''}
                                 </tr>
                             </thead>
@@ -687,6 +689,13 @@
                         <td class="px-6 py-4 whitespace-nowrap">
                             ${invoice.documentURL ? `<a href="${invoice.documentURL}" target="_blank" class="text-blue-600 hover:underline">Ver Documento</a>` : 'N/A'}
                         </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            ${invoice.status === 'pendiente' ? `
+                                <button onclick="window.app.handleMarkInvoiceAsPaid('${invoice.id}')" class="bg-green-500 hover:bg-green-700 text-white font-bold py-1 px-2 rounded text-xs">
+                                    Marcar como Pagada
+                                </button>
+                            ` : ''}
+                        </td>
                     </tr>
                 `;
             }).join('');
@@ -703,7 +712,8 @@
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vehículo</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monto</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
-                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
                                 </tr>
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
@@ -1020,6 +1030,10 @@
                     <input name="address" value="${dealer.address || ''}" placeholder="Dirección" class="border p-2 rounded w-full" />
                     <input name="territory" value="${dealer.territory || ''}" placeholder="Territorio" class="border p-2 rounded w-full" />
                     <input name="creditLine" type="number" value="${dealer.creditLine || ''}" placeholder="Línea de Crédito" class="border p-2 rounded w-full" />
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Crédito Disponible</label>
+                        <input name="availableCredit" type="number" value="${dealer.availableCredit || ''}" placeholder="Crédito Disponible" class="border p-2 rounded w-full bg-gray-100" readonly />
+                    </div>
                     <div class="flex justify-end gap-4">
                         <button type="button" onclick="window.app.closeModal()" class="bg-gray-500 text-white px-4 py-2 rounded">Cancelar</button>
                         <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar</button>
@@ -1237,6 +1251,22 @@
                     }
                 }
             },
+            handleMarkInvoiceAsPaid: async (invoiceId) => {
+                if (confirm('¿Estás seguro de que quieres marcar esta factura como pagada?')) {
+                    const markInvoiceAsPaid = httpsCallable(functions, 'markInvoiceAsPaid');
+                    try {
+                        const result = await markInvoiceAsPaid({ invoiceId });
+                        if (result.data.success) {
+                            appController.setNotification({ type: 'success', message: result.data.message });
+                        } else {
+                            throw new Error(result.data.message);
+                        }
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: `Error al marcar la factura como pagada: ${error.message}` });
+                        console.error(error);
+                    }
+                }
+            },
             handleAssignDealer: async (vehicleId, dealerId) => {
                  try {
                      await updateDoc(doc(db, 'vehicles', vehicleId), { dealerId });
@@ -1250,18 +1280,27 @@
                 const formData = new FormData(e.target);
                 const dealerData = Object.fromEntries(formData.entries());
                 dealerData.creditLine = Number(dealerData.creditLine);
-                
+
                 try {
                     if (dealerId) {
-                        await updateDoc(doc(db, 'dealers', dealerId), dealerData);
+                        const oldDealerData = state.collections.dealers.find(d => d.id === dealerId);
+                        const creditLineDiff = dealerData.creditLine - (oldDealerData.creditLine || 0);
+                        const newAvailableCredit = (oldDealerData.availableCredit || 0) + creditLineDiff;
+
+                        await updateDoc(doc(db, 'dealers', dealerId), {
+                            ...dealerData,
+                            availableCredit: newAvailableCredit
+                        });
                         appController.setNotification({ type: 'success', message: 'Concesionario actualizado.' });
                     } else {
+                        dealerData.availableCredit = dealerData.creditLine;
                         await addDoc(collection(db, 'dealers'), dealerData);
                         appController.setNotification({ type: 'success', message: 'Concesionario creado.' });
                     }
                     appController.closeModal();
-                } catch(error) {
-                     appController.setNotification({ type: 'error', message: 'Error al guardar.' });
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: 'Error al guardar.' });
+                    console.error(error);
                 }
             },
             handleDeleteDealer: async (id) => {
