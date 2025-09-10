@@ -1239,69 +1239,33 @@
                 renderCurrentPage();
             },
             handleSaveVehicle: async (e, vehicleId) => {
-                 e.preventDefault();
-                 const formData = new FormData(e.target);
-                 const vehicleData = Object.fromEntries(formData.entries());
-                 vehicleData.price = Number(vehicleData.price);
-                 if (vehicleData.fabrication_date) {
-                    vehicleData.fabrication_date = new Date(vehicleData.fabrication_date);
-                 }
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const vehicleData = Object.fromEntries(formData.entries());
+                vehicleData.price = Number(vehicleData.price);
+                if (vehicleData.fabrication_date) {
+                    vehicleData.fabrication_date = new Date(vehicleData.fabrication_date).toISOString();
+                }
 
-                 if (!vehicleId) { // Solo validar VIN para vehículos nuevos
-                    const vinExists = state.collections.vehicles.some(v => v.vin === vehicleData.vin);
-                    if (vinExists) {
-                        appController.setNotification({ type: 'error', message: 'Error: El VIN ya existe.' });
-                        return;
-                    }
-                 }
-                
-                 try {
-                     if (vehicleId) {
-                        const oldVehicleData = state.collections.vehicles.find(v => v.id === vehicleId);
-                        const updatedData = { ...vehicleData };
-
-                        if (updatedData.status !== oldVehicleData.status) {
-                            updatedData.statusHistory = arrayUnion({
-                                status: updatedData.status,
-                                date: serverTimestamp()
-                            });
-                        }
-
-                        if (updatedData.status === 'enConcesionario' && oldVehicleData.status !== 'enConcesionario' && oldVehicleData.dealerId) {
-                            const invoiceData = {
-                                vehicleId: vehicleId,
-                                dealerId: oldVehicleData.dealerId,
-                                price: oldVehicleData.price,
-                                date: serverTimestamp(),
-                                status: 'pendiente', // o 'pagada'
-                                 documentURL: '', // Placeholder for document URL
-                            };
-                            await addDoc(collection(db, 'b2b_invoices'), invoiceData);
-                            appController.setNotification({ type: 'success', message: 'Factura B2B generada.' });
-                        }
-                         await updateDoc(doc(db, 'vehicles', vehicleId), updatedData);
-                         appController.setNotification({ type: 'success', message: 'Vehículo actualizado.' });
-                     } else {
-                        const newVehicleData = {
-                             ...vehicleData,
-                             statusHistory: [{ status: vehicleData.status, date: new Date() }]
-                         };
-                         await addDoc(collection(db, 'vehicles'), newVehicleData);
-                         appController.setNotification({ type: 'success', message: 'Vehículo creado.' });
-                     }
-                     appController.closeModal();
-                 } catch (error) {
-                     appController.setNotification({ type: 'error', message: 'Error al guardar el vehículo.' });
-                     console.error(error);
-                 }
+                const saveVehicle = httpsCallable(functions, 'saveVehicle');
+                try {
+                    const result = await saveVehicle({ vehicleId: vehicleId || null, vehicleData });
+                    appController.setNotification({ type: 'success', message: result.data.message });
+                    appController.closeModal();
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
+                    console.error(error);
+                }
             },
             handleDeleteVehicle: async (id) => {
                 if (confirm('¿Estás seguro de que quieres eliminar este vehículo?')) {
+                    const deleteVehicle = httpsCallable(functions, 'deleteVehicle');
                     try {
-                        await deleteDoc(doc(db, 'vehicles', id));
-                        appController.setNotification({ type: 'success', message: 'Vehículo eliminado.' });
+                        const result = await deleteVehicle({ vehicleId: id });
+                        appController.setNotification({ type: 'success', message: result.data.message });
                     } catch (error) {
-                        appController.setNotification({ type: 'error', message: 'Error al eliminar.' });
+                        appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
+                        console.error(error);
                     }
                 }
             },
@@ -1338,48 +1302,39 @@
                 }
             },
             handleAssignDealer: async (vehicleId, dealerId) => {
-                 try {
-                     await updateDoc(doc(db, 'vehicles', vehicleId), { dealerId });
-                     appController.setNotification({ type: 'success', message: 'Concesionario asignado.' });
-                 } catch (error) {
-                     appController.setNotification({ type: 'error', message: 'Error al asignar.' });
-                 }
+                const assignDealer = httpsCallable(functions, 'assignDealer');
+                try {
+                    const result = await assignDealer({ vehicleId, dealerId });
+                    appController.setNotification({ type: 'success', message: result.data.message });
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
+                    console.error(error);
+                }
             },
             handleSaveDealer: async (e, dealerId) => {
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 const dealerData = Object.fromEntries(formData.entries());
-                dealerData.creditLine = Number(dealerData.creditLine);
 
+                const saveDealer = httpsCallable(functions, 'saveDealer');
                 try {
-                    if (dealerId) {
-                        const oldDealerData = state.collections.dealers.find(d => d.id === dealerId);
-                        const creditLineDiff = dealerData.creditLine - (oldDealerData.creditLine || 0);
-                        const newAvailableCredit = (oldDealerData.availableCredit || 0) + creditLineDiff;
-
-                        await updateDoc(doc(db, 'dealers', dealerId), {
-                            ...dealerData,
-                            availableCredit: newAvailableCredit
-                        });
-                        appController.setNotification({ type: 'success', message: 'Concesionario actualizado.' });
-                    } else {
-                        dealerData.availableCredit = dealerData.creditLine;
-                        await addDoc(collection(db, 'dealers'), dealerData);
-                        appController.setNotification({ type: 'success', message: 'Concesionario creado.' });
-                    }
+                    const result = await saveDealer({ dealerId: dealerId || null, dealerData });
+                    appController.setNotification({ type: 'success', message: result.data.message });
                     appController.closeModal();
                 } catch (error) {
-                    appController.setNotification({ type: 'error', message: 'Error al guardar.' });
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
                     console.error(error);
                 }
             },
             handleDeleteDealer: async (id) => {
-                 if (confirm('¿Estás seguro?')) {
+                if (confirm('¿Estás seguro?')) {
+                    const deleteDealer = httpsCallable(functions, 'deleteDealer');
                     try {
-                        await deleteDoc(doc(db, 'dealers', id));
-                        appController.setNotification({ type: 'success', message: 'Concesionario eliminado.' });
+                        const result = await deleteDealer({ dealerId: id });
+                        appController.setNotification({ type: 'success', message: result.data.message });
                     } catch (error) {
-                        appController.setNotification({ type: 'error', message: 'Error al eliminar.' });
+                        appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
+                        console.error(error);
                     }
                 }
             },
@@ -1388,20 +1343,17 @@
                 const formData = new FormData(e.target);
                 const customerData = Object.fromEntries(formData.entries());
                 if (customerData.birth_date) {
-                    customerData.birth_date = new Date(customerData.birth_date);
+                    customerData.birth_date = new Date(customerData.birth_date).toISOString();
                 }
                 
+                const saveCustomer = httpsCallable(functions, 'saveCustomer');
                 try {
-                    if (customerId) {
-                         await updateDoc(doc(db, 'customers', customerId), customerData);
-                         appController.setNotification({ type: 'success', message: 'Cliente actualizado.' });
-                    } else {
-                         await addDoc(collection(db, 'customers'), customerData);
-                         appController.setNotification({ type: 'success', message: 'Cliente creado.' });
-                    }
+                    const result = await saveCustomer({ customerId: customerId || null, customerData });
+                    appController.setNotification({ type: 'success', message: result.data.message });
                     appController.closeModal();
                 } catch(error) {
-                    appController.setNotification({ type: 'error', message: 'Error al guardar.' });
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
+                    console.error(error);
                 }
             },
             handleMatchFactoryOrder: async (factoryOrderId) => {
@@ -1432,29 +1384,25 @@
                 const formData = new FormData(e.target);
                 const orderData = Object.fromEntries(formData.entries());
 
-                const newOrder = {
-                    ...orderData,
-                    dealerId: state.userClaims.dealerId,
-                    status: 'pendiente',
-                    createdAt: serverTimestamp()
-                };
-
+                const createFactoryOrder = httpsCallable(functions, 'createFactoryOrder');
                 try {
-                    await addDoc(collection(db, 'factory_orders'), newOrder);
-                    appController.setNotification({ type: 'success', message: 'Pedido de fábrica creado.' });
+                    const result = await createFactoryOrder({ orderData });
+                    appController.setNotification({ type: 'success', message: result.data.message });
                     e.target.reset();
                 } catch (error) {
-                    appController.setNotification({ type: 'error', message: 'Error al crear el pedido.' });
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
                     console.error(error);
                 }
             },
             handleDeleteCustomer: async(id) => {
                 if(confirm('¿Estás seguro?')){
+                    const deleteCustomer = httpsCallable(functions, 'deleteCustomer');
                     try {
-                        await deleteDoc(doc(db, 'customers', id));
-                        appController.setNotification({ type: 'success', message: 'Cliente eliminado.' });
+                        const result = await deleteCustomer({ customerId: id });
+                        appController.setNotification({ type: 'success', message: result.data.message });
                     } catch (error) {
-                        appController.setNotification({ type: 'error', message: 'Error al eliminar.' });
+                        appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
+                        console.error(error);
                     }
                 }
             },
@@ -1463,30 +1411,22 @@
                 const formData = new FormData(e.target);
                 const interactionData = Object.fromEntries(formData.entries());
 
-                const dataToSave = {
-                    ...interactionData,
-                    customerId: customerId,
-                    date: serverTimestamp(),
-                    followUpStatus: 'completed', // Default status
-                };
-
-                if (interactionData.followUpDate) {
-                    dataToSave.followUpDate = new Date(interactionData.followUpDate);
-                    dataToSave.followUpStatus = 'pending';
-                }
-
                 if (!interactionData.notes) {
                     appController.setNotification({ type: 'error', message: 'Las notas no pueden estar vacías.' });
                     return;
                 }
 
+                if (interactionData.followUpDate) {
+                    interactionData.followUpDate = new Date(interactionData.followUpDate).toISOString();
+                }
+
+                const saveInteraction = httpsCallable(functions, 'saveInteraction');
                 try {
-                    await addDoc(collection(db, 'interactions'), dataToSave);
+                    await saveInteraction({ customerId, interactionData });
                     appController.setNotification({ type: 'success', message: 'Interacción guardada.' });
                     e.target.reset();
-                    // No es necesario cerrar y reabrir, Firestore listener actualizará la UI
                 } catch (error) {
-                    appController.setNotification({ type: 'error', message: 'Error al guardar la interacción.' });
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
                     console.error(error);
                 }
             },
@@ -1533,61 +1473,36 @@
                 const formData = new FormData(e.target);
                 const data = Object.fromEntries(formData.entries());
 
-                const dealerId = state.userClaims?.dealerId;
-                if (!data.vehicleId || (!data.customerId && !state.isNewCustomerSale) || !data.finalPrice || !dealerId) {
-                    appController.setNotification({ type: 'error', message: 'Todos los campos son requeridos.' });
-                    return;
-                }
+                const salePayload = {
+                    vehicleId: data.vehicleId,
+                    customerId: data.customerId,
+                    finalPrice: data.finalPrice,
+                    financing_method: data.financing_method,
+                    trade_in_make: data.trade_in_make,
+                    trade_in_model: data.trade_in_model,
+                    trade_in_vin: data.trade_in_vin,
+                    trade_in_value: data.trade_in_value,
+                };
                 
-                const batch = writeBatch(db);
-                try {
-                    let finalCustomerId = data.customerId;
-
-                    if (state.isNewCustomerSale) {
-                        const newCustomerData = {
-                            name: data.name,
-                            dni: data.dni,
-                            email: data.email,
-                            phone: data.phone,
-                            gender: data.gender,
-                            birth_date: data.birth_date ? new Date(data.birth_date) : null,
-                        };
-                        const newCustomerRef = doc(collection(db, 'customers'));
-                        batch.set(newCustomerRef, newCustomerData);
-                        finalCustomerId = newCustomerRef.id;
-                    }
-
-                    const saleData = {
-                        vehicleId: data.vehicleId,
-                        customerId: finalCustomerId,
-                        dealerId: dealerId,
-                        saleDate: serverTimestamp(),
-                        finalPrice: Number(data.finalPrice),
-                        financing_method: data.financing_method || null,
-                        trade_in_make: data.trade_in_make || null,
-                        trade_in_model: data.trade_in_model || null,
-                        trade_in_vin: data.trade_in_vin || null,
-                        trade_in_value: data.trade_in_value ? Number(data.trade_in_value) : null,
+                if (state.isNewCustomerSale) {
+                    salePayload.newCustomerData = {
+                        name: data.name,
+                        dni: data.dni,
+                        email: data.email,
+                        phone: data.phone,
+                        gender: data.gender,
+                        birth_date: data.birth_date ? new Date(data.birth_date).toISOString() : null,
                     };
+                }
 
-                    const saleRef = doc(collection(db, 'sales'));
-                    batch.set(saleRef, saleData);
-
-                    const vehicleRef = doc(db, 'vehicles', data.vehicleId);
-                    batch.update(vehicleRef, {
-                        status: 'vendido',
-                        final_delivery_date: serverTimestamp(),
-                        statusHistory: arrayUnion({ status: 'vendido', date: serverTimestamp() }),
-                    });
-
-                    await batch.commit();
-                    appController.setNotification({ type: 'success', message: 'Venta registrada con éxito.' });
-                    
+                const registerSale = httpsCallable(functions, 'registerSale');
+                try {
+                    const result = await registerSale({ salePayload });
+                    appController.setNotification({ type: 'success', message: result.data.message });
                     state.isNewCustomerSale = false;
-                    renderCurrentPage(); // Re-render para resetear el formulario
-
+                    renderCurrentPage();
                 } catch (error) {
-                    appController.setNotification({ type: 'error', message: 'Error al registrar la venta.' });
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
                     console.error("Error registrando venta:", error);
                 }
             },
@@ -1661,7 +1576,6 @@
                 const header = Object.keys(data[0]);
                 let csv = data.map(row => header.map(fieldName => {
                     let fieldValue = row[fieldName];
-                    // Si el valor es un objeto (como un Timestamp de Firebase), lo convertimos a string
                     if (typeof fieldValue === 'object' && fieldValue !== null && fieldValue.toDate) {
                         fieldValue = fieldValue.toDate().toLocaleString();
                     }
@@ -1738,7 +1652,6 @@
                     .filter(Boolean);
 
                 if (!soldVehicles.length) return 0;
-                // This can reuse the main logic, but for clarity, it's separated.
                 let totalDays = 0;
                 let count = 0;
                 soldVehicles.forEach(vehicle => {
@@ -1838,7 +1751,6 @@
                     return acc;
                 }, {});
 
-                // Ensure all 6 months are present, even if sales are zero
                 const labels = [];
                 for (let i = 5; i >= 0; i--) {
                     const d = new Date();
@@ -1874,28 +1786,23 @@
                     target: Number(formData.get('target')),
                 };
 
-                if (!forecastData.month || !forecastData.target) {
-                    appController.setNotification({ type: 'error', message: 'Mes y objetivo son requeridos.' });
-                    return;
-                }
-
+                const saveForecast = httpsCallable(functions, 'saveForecast');
                 try {
-                    // Firestore doesn't have a concept of primary key on a field, so we just add it.
-                    // A more robust solution would use a transaction to check if a forecast for that month already exists.
-                    await addDoc(collection(db, 'forecasts'), forecastData);
-                    appController.setNotification({ type: 'success', message: 'Pronóstico guardado.' });
+                    const result = await saveForecast({ forecastData });
+                    appController.setNotification({ type: 'success', message: result.data.message });
                     e.target.reset();
                 } catch (error) {
-                    appController.setNotification({ type: 'error', message: 'Error al guardar el pronóstico.' });
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
                     console.error(error);
                 }
             },
             handleCompleteFollowUp: async (interactionId) => {
+                const completeFollowUp = httpsCallable(functions, 'completeFollowUp');
                 try {
-                    await updateDoc(doc(db, 'interactions', interactionId), { followUpStatus: 'completed' });
-                    appController.setNotification({ type: 'success', message: 'Seguimiento completado.' });
+                    const result = await completeFollowUp({ interactionId });
+                    appController.setNotification({ type: 'success', message: result.data.message });
                 } catch (error) {
-                    appController.setNotification({ type: 'error', message: 'Error al actualizar el seguimiento.' });
+                    appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
                     console.error(error);
                 }
             },
@@ -1979,9 +1886,10 @@
                 const claims = idTokenResult.claims;
                 state.user = firebaseUser;
                 // --- CAMBIO CLAVE ---
-                // Si el usuario no tiene un rol en Firebase, le asignamos 'dealer' por defecto para que pueda entrar.
-                // Para una solución permanente, debes configurar los Custom Claims en tu proyecto de Firebase.
-                state.role = claims.role || 'dealer'; 
+                // --- CAMBIO DE SEGURIDAD CRÍTICO ---
+                // Se elimina el fallback a 'dealer'. Si un usuario no tiene un rol en sus Custom Claims,
+                // no se le asignará ninguno y no podrá acceder a las funcionalidades.
+                state.role = claims.role || null;
                 state.userClaims = claims;
                 setupFirestoreListeners();
             } else {

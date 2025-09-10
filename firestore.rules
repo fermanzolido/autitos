@@ -1,0 +1,77 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions to make rules more readable.
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function hasRole(role) {
+      return isSignedIn() && request.auth.token.role == role;
+    }
+
+    function isOneOfRoles(roles) {
+      return isSignedIn() && request.auth.token.role in roles;
+    }
+
+    function isOwner(dealerId) {
+      return isSignedIn() && request.auth.token.dealerId == dealerId;
+    }
+
+    // By default, deny all reads and writes.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Dealers: Admins can manage, Admins and Factory can view.
+    match /dealers/{dealerId} {
+      allow read: if isOneOfRoles(['admin', 'factory']);
+      allow write: if hasRole('admin'); // create, update, delete
+    }
+
+    // Vehicles: Read access is role-based. All modifications must go through Cloud Functions.
+    match /vehicles/{vehicleId} {
+      allow read: if isOneOfRoles(['admin', 'factory']) || (hasRole('dealer') && isOwner(resource.data.dealerId));
+      allow write: if false; // All writes must be done via backend functions.
+    }
+
+    // Sales: Read access is role-based. All modifications must go through Cloud Functions.
+    match /sales/{saleId} {
+      allow read: if hasRole('admin') || (hasRole('dealer') && isOwner(resource.data.dealerId));
+      allow write: if false;
+    }
+
+    // Customers: Read access for admin/dealers. Writes must go through Cloud Functions.
+    // A more granular read rule for dealers is complex and not implemented here.
+    // The focus is on preventing unauthorized data modification.
+    match /customers/{customerId} {
+      allow read: if isOneOfRoles(['admin', 'dealer']);
+      allow write: if false;
+    }
+
+    // B2B Invoices: Read access is role-based. Writes must go through Cloud Functions.
+    match /b2b_invoices/{invoiceId} {
+      allow read: if isOneOfRoles(['admin', 'factory']) || (hasRole('dealer') && isOwner(resource.data.dealerId));
+      allow write: if false;
+    }
+
+    // Factory Orders: Read access is role-based. Writes must go through Cloud Functions.
+    match /factory_orders/{orderId} {
+      allow read: if isOneOfRoles(['admin', 'factory']) || (hasRole('dealer') && isOwner(resource.data.dealerId));
+      allow write: if false;
+    }
+
+    // Interactions: Read access for admin/dealers. Writes must go through Cloud Functions.
+    match /interactions/{interactionId} {
+      allow read: if isOneOfRoles(['admin', 'dealer']);
+      allow write: if false;
+    }
+
+    // Forecasts: Only Admins and Factory users can read or write.
+    match /forecasts/{forecastId} {
+      allow read, write: if isOneOfRoles(['admin', 'factory']);
+    }
+  }
+}
