@@ -144,6 +144,67 @@ exports.markInvoiceAsPaid = functions.https.onCall(async (data, context) => {
     }
 });
 
+exports.matchFactoryOrder = functions.https.onCall(async (data, context) => {
+    if (!context.auth || (context.auth.token.role !== 'admin' && context.auth.token.role !== 'factory')) {
+        throw new functions.https.HttpsError(
+            "permission-denied",
+            "The function must be called by an admin or factory user."
+        );
+    }
+
+    const { factoryOrderId, vehicleId } = data;
+
+    const factoryOrderRef = db.collection("factory_orders").doc(factoryOrderId);
+    const vehicleRef = db.collection("vehicles").doc(vehicleId);
+
+    try {
+        await db.runTransaction(async (transaction) => {
+            const factoryOrderDoc = await transaction.get(factoryOrderRef);
+            const vehicleDoc = await transaction.get(vehicleRef);
+
+            if (!factoryOrderDoc.exists || !vehicleDoc.exists) {
+                throw new functions.https.HttpsError("not-found", "Factory order or vehicle not found.");
+            }
+
+            const factoryOrderData = factoryOrderDoc.data();
+            const vehicleData = vehicleDoc.data();
+
+            if (factoryOrderData.status !== 'pendiente') {
+                throw new functions.https.HttpsError("failed-precondition", "Factory order is not pending.");
+            }
+
+            if (vehicleData.dealerId || vehicleData.status !== 'enFabrica') {
+                throw new functions.https.HttpsError("failed-precondition", "Vehicle is not available for matching.");
+            }
+
+            transaction.update(factoryOrderRef, {
+                status: 'emparejado',
+                matchedVehicleId: vehicleId
+            });
+
+            transaction.update(vehicleRef, {
+                dealerId: factoryOrderData.dealerId,
+                status: 'asignado',
+                statusHistory: admin.firestore.FieldValue.arrayUnion({
+                    status: "asignado",
+                    date: new Date(),
+                }),
+            });
+        });
+
+        return { success: true, message: "Factory order matched successfully." };
+    } catch (error) {
+        console.error("Error matching factory order:", error);
+        if (error instanceof functions.https.HttpsError) {
+            throw error;
+        }
+        throw new functions.https.HttpsError(
+            "internal",
+            "An internal error occurred while matching the factory order."
+        );
+    }
+});
+
 exports.receiveVehicle = functions.https.onCall(async (data, context) => {
   const vehicleId = data.vehicleId;
 

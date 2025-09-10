@@ -73,6 +73,7 @@
                 interactions: [],
                 b2b_invoices: [],
                 forecasts: [],
+                factory_orders: [],
             },
             collectionsLoading: {
                 vehicles: true,
@@ -83,6 +84,7 @@
                 interactions: true,
                 b2b_invoices: true,
                 forecasts: true,
+                factory_orders: true,
             },
             filters: {
                 vehicles: { status: [], make: '', model: '', daysInStock_greaterThan: '' }
@@ -173,6 +175,7 @@
                 { name: 'Clientes', page: 'customers', roles: ['admin', 'dealer'] },
                 { name: 'Ventas', page: 'sales', roles: ['admin', 'dealer'] },
                 { name: 'Pedidos de Fábrica', page: 'factoryOrders', roles: ['dealer'] },
+                { name: 'Gestión de Pedidos', page: 'factoryOrdersAdmin', roles: ['admin', 'factory'] },
                 { name: 'Seguimientos', page: 'scheduledFollowUps', roles: ['admin', 'dealer'] },
                 { name: 'Reportes', page: 'reports', roles: ['admin'] },
             ];
@@ -218,6 +221,7 @@
                 sales: SalesPageHTML,
                 reports: ReportsPageHTML,
                 factoryOrders: FactoryOrdersPageHTML,
+                factoryOrdersAdmin: FactoryOrdersAdminPageHTML,
                 b2bInvoices: B2BInvoicesPageHTML,
                 biDashboard: BIDashboardPageHTML,
                 forecasts: ForecastsPageHTML,
@@ -724,36 +728,102 @@
         }
 
         function FactoryOrdersPageHTML() {
-            if (state.collectionsLoading.vehicles) return SpinnerHTML();
+            if (state.collectionsLoading.factory_orders) return SpinnerHTML();
             if (state.role !== 'dealer') {
                 return `<div class="p-4">Acceso denegado.</div>`;
             }
 
-            const assignedVehicles = state.collections.vehicles.filter(v => v.status === 'asignado' && v.dealerId === state.userClaims.dealerId);
+            const dealerOrders = state.collections.factory_orders.filter(o => o.dealerId === state.userClaims.dealerId);
 
-            const tableRows = assignedVehicles.map(v => `
-                <tr key=${v.id}>
-                    <td class="px-6 py-4 whitespace-nowrap">${v.make} ${v.model}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${v.vin}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">$${(v.price || 0).toLocaleString()}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <button onclick="window.app.handleConfirmOrder('${v.id}')" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
-                            Confirmar Pedido
-                        </button>
-                    </td>
+            const tableRows = dealerOrders.map(o => `
+                <tr key=${o.id}>
+                    <td class="px-6 py-4 whitespace-nowrap">${o.make}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${o.model}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${o.trim}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${o.color}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${o.status}</td>
                 </tr>
             `).join('');
 
             return `
                 <div>
                     <h1 class="text-3xl font-bold mb-6 text-gray-800">Pedidos de Fábrica</h1>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                        <div class="bg-white p-6 rounded-lg shadow-md">
+                            <h2 class="text-xl font-semibold mb-4">Solicitar Nuevo Vehículo</h2>
+                            <form onsubmit="window.app.handleCreateFactoryOrder(event)" class="space-y-4">
+                                <input name="make" placeholder="Marca" class="border p-2 rounded w-full" required />
+                                <input name="model" placeholder="Modelo" class="border p-2 rounded w-full" required />
+                                <input name="trim" placeholder="Equipamiento (Trim)" class="border p-2 rounded w-full" />
+                                <input name="color" placeholder="Color" class="border p-2 rounded w-full" />
+                                <textarea name="options" placeholder="Opciones adicionales" class="border p-2 rounded w-full"></textarea>
+                                <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Enviar Solicitud</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
+                        <h2 class="text-xl font-semibold mb-4">Mis Pedidos</h2>
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Marca</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Modelo</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Equipamiento</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Color</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function FactoryOrdersAdminPageHTML() {
+            if (state.collectionsLoading.factory_orders || state.collectionsLoading.vehicles) return SpinnerHTML();
+            if (state.role !== 'admin' && state.role !== 'factory') {
+                return `<div class="p-4">Acceso denegado.</div>`;
+            }
+
+            const pendingOrders = state.collections.factory_orders.filter(o => o.status === 'pendiente');
+            const availableVehicles = state.collections.vehicles.filter(v => !v.dealerId && v.status === 'enFabrica');
+
+            const tableRows = pendingOrders.map(o => {
+                const dealer = state.collections.dealers.find(d => d.id === o.dealerId);
+                return `
+                    <tr key=${o.id}>
+                        <td class="px-6 py-4 whitespace-nowrap">${dealer ? dealer.name : 'N/A'}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${o.make} ${o.model}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${o.trim}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${o.color}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <select id="vehicle-for-${o.id}" class="border p-1 rounded text-xs">
+                                <option value="">Seleccionar vehículo...</option>
+                                ${availableVehicles.map(v => `<option value="${v.id}">${v.make} ${v.model} (${v.vin})</option>`).join('')}
+                            </select>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button onclick="window.app.handleMatchFactoryOrder('${o.id}')" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 px-2 rounded text-xs">
+                                Emparejar
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Gestión de Pedidos de Fábrica</h1>
                     <div class="bg-white p-4 rounded-lg shadow overflow-x-auto">
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vehículo</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">VIN</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Precio</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Concesionario</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vehículo Solicitado</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Equipamiento</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Color</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asignar Vehículo de Inventario</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acciones</th>
                                 </tr>
                             </thead>
@@ -1334,6 +1404,50 @@
                     appController.setNotification({ type: 'error', message: 'Error al guardar.' });
                 }
             },
+            handleMatchFactoryOrder: async (factoryOrderId) => {
+                const vehicleId = document.getElementById(`vehicle-for-${factoryOrderId}`).value;
+
+                if (!vehicleId) {
+                    appController.setNotification({ type: 'error', message: 'Por favor, selecciona un vehículo para emparejar.' });
+                    return;
+                }
+
+                if (confirm('¿Estás seguro de que quieres emparejar este pedido con el vehículo seleccionado?')) {
+                    const matchFactoryOrder = httpsCallable(functions, 'matchFactoryOrder');
+                    try {
+                        const result = await matchFactoryOrder({ factoryOrderId, vehicleId });
+                        if (result.data.success) {
+                            appController.setNotification({ type: 'success', message: result.data.message });
+                        } else {
+                            throw new Error(result.data.message);
+                        }
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: `Error al emparejar el pedido: ${error.message}` });
+                        console.error(error);
+                    }
+                }
+            },
+            handleCreateFactoryOrder: async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const orderData = Object.fromEntries(formData.entries());
+
+                const newOrder = {
+                    ...orderData,
+                    dealerId: state.userClaims.dealerId,
+                    status: 'pendiente',
+                    createdAt: serverTimestamp()
+                };
+
+                try {
+                    await addDoc(collection(db, 'factory_orders'), newOrder);
+                    appController.setNotification({ type: 'success', message: 'Pedido de fábrica creado.' });
+                    e.target.reset();
+                } catch (error) {
+                    appController.setNotification({ type: 'error', message: 'Error al crear el pedido.' });
+                    console.error(error);
+                }
+            },
             handleDeleteCustomer: async(id) => {
                 if(confirm('¿Estás seguro?')){
                     try {
@@ -1809,7 +1923,7 @@
             firestoreUnsubscribers.forEach(unsub => unsub());
             firestoreUnsubscribers = [];
 
-            const collectionsToWatch = ['dealers', 'customers', 'sales', 'b2b_invoices', 'forecasts'];
+            const collectionsToWatch = ['dealers', 'customers', 'sales', 'b2b_invoices', 'forecasts', 'factory_orders'];
             
             collectionsToWatch.forEach(name => {
                 const unsub = onSnapshot(collection(db, name), snapshot => {
