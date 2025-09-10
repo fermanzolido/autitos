@@ -173,6 +173,7 @@
                 { name: 'Concesionarios', page: 'dealers', roles: ['admin', 'factory'] },
                 { name: 'Facturación B2B', page: 'b2bInvoices', roles: ['admin', 'factory'] },
                 { name: 'Análisis BI', page: 'biDashboard', roles: ['admin', 'factory'] },
+                { name: 'Análisis de Demanda', page: 'demandAnalysis', roles: ['factory'] },
                 { name: 'Pronósticos', page: 'forecasts', roles: ['admin', 'factory'] },
                 { name: 'Clientes', page: 'customers', roles: ['admin', 'dealer'] },
                 { name: 'Ventas', page: 'sales', roles: ['admin', 'dealer'] },
@@ -228,6 +229,7 @@
                 biDashboard: BIDashboardPageHTML,
                 forecasts: ForecastsPageHTML,
                 scheduledFollowUps: ScheduledFollowUpsPageHTML,
+                demandAnalysis: DemandAnalysisPageHTML,
             };
 
             const renderFunc = pages[state.currentPage] || DashboardPageHTML;
@@ -708,6 +710,62 @@
                     <div class="mt-8 bg-white p-6 rounded-lg shadow-md">
                         <h3 class="text-lg font-semibold mb-4">Ventas vs. Pronóstico</h3>
                         <canvas id="salesVsForecastChart"></canvas>
+                    </div>
+                </div>
+            `;
+        }
+
+        function DemandAnalysisPageHTML() {
+            const { topCombinations, topModelsByRegion } = appController.calculateSalesVelocityData();
+
+            const combinationsHTML = topCombinations.map(c => `
+                <tr class="border-b">
+                    <td class="py-2 px-4">${c.model}</td>
+                    <td class="py-2 px-4">${c.trim}</td>
+                    <td class="py-2 px-4">${c.color}</td>
+                    <td class="py-2 px-4 font-bold">${c.avgDays}</td>
+                </tr>
+            `).join('');
+
+            const regionsHTML = topModelsByRegion.map(r => `
+                <tr class="border-b">
+                    <td class="py-2 px-4">${r.region}</td>
+                    <td class="py-2 px-4">${r.model}</td>
+                    <td class="py-2 px-4 font-bold">${r.avgDays}</td>
+                </tr>
+            `).join('');
+
+            return `
+                <div>
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Análisis de Demanda</h1>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div class="bg-white p-6 rounded-lg shadow">
+                            <h2 class="text-xl font-semibold mb-4">Top 10 Configuraciones más Rápidas en Venderse</h2>
+                            <table class="w-full">
+                                <thead>
+                                    <tr class="border-b">
+                                        <th class="py-2 px-4 text-left">Modelo</th>
+                                        <th class="py-2 px-4 text-left">Trim</th>
+                                        <th class="py-2 px-4 text-left">Color</th>
+                                        <th class="py-2 px-4 text-left">Días Promedio</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${combinationsHTML}</tbody>
+                            </table>
+                        </div>
+                        <div class="bg-white p-6 rounded-lg shadow">
+                            <h2 class="text-xl font-semibold mb-4">Modelo más Rápido por Región</h2>
+                            <table class="w-full">
+                                <thead>
+                                    <tr class="border-b">
+                                        <th class="py-2 px-4 text-left">Región</th>
+                                        <th class="py-2 px-4 text-left">Modelo</th>
+                                        <th class="py-2 px-4 text-left">Días Promedio</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${regionsHTML}</tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             `;
@@ -1986,6 +2044,80 @@
                     appController.setNotification({ type: 'error', message: `Error: ${error.message}` });
                     console.error(error);
                 }
+            },
+            calculateSalesVelocityData: () => {
+                const soldVehicles = state.collections.vehicles.filter(v => v.status === 'vendido' && v.statusHistory);
+
+                const velocityData = soldVehicles.map(vehicle => {
+                    const arrivalEntry = vehicle.statusHistory
+                        .filter(h => h.status === 'enConcesionario')
+                        .sort((a, b) => b.date.toDate() - a.date.toDate())[0];
+
+                    const saleEntry = vehicle.statusHistory.find(h => h.status === 'vendido');
+
+                    if (!arrivalEntry || !saleEntry) {
+                        return null;
+                    }
+
+                    const arrivalDate = arrivalEntry.date.toDate();
+                    const saleDate = saleEntry.date.toDate();
+                    const daysToSell = Math.ceil(Math.abs(saleDate - arrivalDate) / (1000 * 60 * 60 * 24));
+
+                    const sale = state.collections.sales.find(s => s.vehicleId === vehicle.id);
+                    if (!sale) return null;
+
+                    const dealer = state.collections.dealers.find(d => d.id === sale.dealerId);
+                    if (!dealer) return null;
+
+                    return {
+                        make: vehicle.make,
+                        model: vehicle.model,
+                        trim: vehicle.trim || 'N/A',
+                        color: vehicle.color || 'N/A',
+                        region: dealer.territory,
+                        daysToSell,
+                    };
+                }).filter(Boolean);
+
+                // Group by combination
+                const byCombination = velocityData.reduce((acc, data) => {
+                    const key = `${data.model}-${data.trim}-${data.color}`;
+                    if (!acc[key]) {
+                        acc[key] = { model: data.model, trim: data.trim, color: data.color, totalDays: 0, count: 0 };
+                    }
+                    acc[key].totalDays += data.daysToSell;
+                    acc[key].count++;
+                    return acc;
+                }, {});
+
+                const topCombinations = Object.values(byCombination).map(group => ({
+                    ...group,
+                    avgDays: (group.totalDays / group.count).toFixed(1),
+                })).sort((a, b) => a.avgDays - b.avgDays).slice(0, 10);
+
+                // Group by region and model
+                const byRegionModel = velocityData.reduce((acc, data) => {
+                    const key = `${data.region}-${data.model}`;
+                    if (!acc[key]) {
+                        acc[key] = { region: data.region, model: data.model, totalDays: 0, count: 0 };
+                    }
+                    acc[key].totalDays += data.daysToSell;
+                    acc[key].count++;
+                    return acc;
+                }, {});
+
+                const topModelsByRegion = {};
+                Object.values(byRegionModel).forEach(group => {
+                    const avgDays = group.totalDays / group.count;
+                    if (!topModelsByRegion[group.region] || avgDays < topModelsByRegion[group.region].avgDays) {
+                        topModelsByRegion[group.region] = {
+                            model: group.model,
+                            avgDays: avgDays.toFixed(1)
+                        };
+                    }
+                });
+
+                return { topCombinations, topModelsByRegion: Object.entries(topModelsByRegion).map(([region, data]) => ({region, ...data})) };
             },
         };
 
