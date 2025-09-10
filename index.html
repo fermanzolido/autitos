@@ -26,6 +26,7 @@
             getFirestore, collection, onSnapshot, doc, addDoc,
             updateDoc, deleteDoc, writeBatch, serverTimestamp, query, where, arrayUnion
         } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js";
+        import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-functions.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-analytics.js";
 
         // --- INSTRUCCIONES DE CONFIGURACIÓN ---
@@ -53,6 +54,7 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+        const functions = getFunctions(app);
         const analytics = getAnalytics(app);
 
         // --- ESTADO GLOBAL DE LA APLICACIÓN ---
@@ -375,7 +377,18 @@
                                     ${state.collections.dealers.map(d => `<option value="${d.id}" ${v.dealerId === d.id ? 'selected' : ''}>${d.name}</option>`).join('')}
                                 </select>
                             </div>
-                        ` : `<span class="text-gray-500">Sin acciones</span>`}
+                        ` : ''}
+                        ${(state.role === 'dealer' && v.status === 'asignado') ? `
+                            <button onclick="window.app.handleConfirmOrder('${v.id}')" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 px-2 rounded text-xs">
+                                Confirmar Pedido
+                            </button>
+                        ` : ''}
+                        ${(state.role === 'dealer' && v.status === 'enTransito') ? `
+                            <button onclick="window.app.handleReceiveVehicle('${v.id}')" class="bg-green-500 hover:bg-green-700 text-white font-bold py-1 px-2 rounded text-xs">
+                                Recibir Vehículo
+                            </button>
+                        ` : ''}
+                        ${(state.role === 'dealer' && v.status !== 'asignado' && v.status !== 'enTransito') ? `<span class="text-gray-500">Sin acciones</span>` : ''}
                     </td>` : ''}
                 </tr>
             `).join('');
@@ -992,14 +1005,7 @@
                         <label for="fabrication_date" class="text-sm text-gray-600">Fecha de Fabricación</label>
                         <input name="fabrication_date" type="date" value="${vehicle.fabrication_date || ''}" class="border p-2 rounded w-full" />
                     </div>
-                    <select name="status" class="border p-2 rounded w-full">
-                        <option value="enFabrica" ${vehicle.status === 'enFabrica' ? 'selected' : ''}>En Fábrica</option>
-                        <option value="asignado" ${vehicle.status === 'asignado' ? 'selected' : ''}>Asignado</option>
-                        <option value="enPuerto" ${vehicle.status === 'enPuerto' ? 'selected' : ''}>En Puerto</option>
-                        <option value="enTransito" ${vehicle.status === 'enTransito' ? 'selected' : ''}>En Tránsito</option>
-                        <option value="enConcesionario" ${vehicle.status === 'enConcesionario' ? 'selected' : ''}>En Concesionario</option>
-                        <option value="vendido" ${vehicle.status === 'vendido' ? 'selected' : ''}>Vendido</option>
-                    </select>
+                    <p class="text-sm text-gray-600">Estado actual: <span class="font-bold">${vehicle.status || 'N/A'}</span></p>
                     <div class="flex justify-end gap-4">
                         <button type="button" onclick="window.app.closeModal()" class="bg-gray-500 text-white px-4 py-2 rounded">Cancelar</button>
                         <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Guardar</button>
@@ -1215,6 +1221,22 @@
                     }
                 }
             },
+            handleReceiveVehicle: async (vehicleId) => {
+                if (confirm('¿Estás seguro de que quieres marcar este vehículo como recibido? El estado cambiará a "En Concesionario".')) {
+                    const receiveVehicle = httpsCallable(functions, 'receiveVehicle');
+                    try {
+                        const result = await receiveVehicle({ vehicleId });
+                        if (result.data.success) {
+                            appController.setNotification({ type: 'success', message: result.data.message });
+                        } else {
+                            throw new Error(result.data.message);
+                        }
+                    } catch (error) {
+                        appController.setNotification({ type: 'error', message: `Error al recibir el vehículo: ${error.message}` });
+                        console.error(error);
+                    }
+                }
+            },
             handleAssignDealer: async (vehicleId, dealerId) => {
                  try {
                      await updateDoc(doc(db, 'vehicles', vehicleId), { dealerId });
@@ -1317,11 +1339,16 @@
             },
             handleConfirmOrder: async (vehicleId) => {
                 if (confirm('¿Estás seguro de que quieres confirmar este pedido? El vehículo pasará a estado "En Tránsito".')) {
+                    const confirmOrder = httpsCallable(functions, 'handleConfirmOrder');
                     try {
-                        await updateDoc(doc(db, 'vehicles', vehicleId), { status: 'enTransito' });
-                        appController.setNotification({ type: 'success', message: 'Pedido confirmado.' });
+                        const result = await confirmOrder({ vehicleId });
+                        if (result.data.success) {
+                            appController.setNotification({ type: 'success', message: result.data.message });
+                        } else {
+                            throw new Error(result.data.message);
+                        }
                     } catch (error) {
-                        appController.setNotification({ type: 'error', message: 'Error al confirmar el pedido.' });
+                        appController.setNotification({ type: 'error', message: `Error al confirmar el pedido: ${error.message}` });
                         console.error(error);
                     }
                 }

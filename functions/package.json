@@ -1,0 +1,14 @@
+{
+  "name": "autitos-functions",
+  "description": "Cloud Functions for Autitos App",
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^11.0.0",
+    "firebase-functions": "^4.0.0",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": "18"
+  },
+  "private": true
+}
