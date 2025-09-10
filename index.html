@@ -101,12 +101,14 @@
             ui: {
                 tableDensity: 'default', // 'default' or 'compact'
                 visibleVehicleColumns: ['make_model', 'vin_price', 'status', 'actions'],
+                biChart: { level: 'territory', territory: null }
             }
         };
 
         // Contenedor principal de la aplicación
         const appContainer = document.getElementById('app-container');
         let firestoreUnsubscribers = [];
+        let salesByTerritoryChartInstance = null;
 
         // --- FUNCIONES DE RENDERIZADO (Generan HTML) ---
 
@@ -236,6 +238,7 @@
             }
             if (state.currentPage === 'biDashboard') {
                 appController.renderBITopCharts();
+                appController.renderSalesVsForecastChart();
             }
             if (state.currentPage === 'dashboard' && state.role === 'dealer') {
                 appController.renderDealerSalesChart();
@@ -290,9 +293,18 @@
                 stats.territoryAvgDaysInStock = appController.calculateAvgDaysInStockForTerritory(dealer.territory);
             }
 
+            const agingVehicles = appController.getAgingInventory();
+            const alertsHTML = (state.role === 'admin' || state.role === 'factory') && agingVehicles.length > 0 ? `
+                <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6" role="alert">
+                    <p class="font-bold">Alerta de Inventario Antiguo</p>
+                    <p>Hay <strong>${agingVehicles.length}</strong> vehículo(s) que han estado en stock por más de 90 días.</p>
+                </div>
+            ` : '';
+
              return `
                 <div>
                     <h1 class="text-3xl font-bold mb-6 text-gray-800">Dashboard</h1>
+                    ${alertsHTML}
                     <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
                         ${(state.role === 'admin' || state.role === 'factory') ? `
                             <div class="bg-white p-6 rounded-lg shadow-md"><h3 class="text-lg font-semibold">Vehículos en Stock</h3><p class="text-4xl font-bold text-blue-600">${stats.vehiclesInStock}</p></div>
@@ -654,8 +666,8 @@
                 return `<div class="p-4">Acceso denegado.</div>`;
             }
 
-            // Placeholder for KPIs and charts
             const turnoverRate = appController.calculateInventoryTurnoverRate();
+            const isDealershipView = state.ui.biChart.level === 'dealership';
 
             return `
                 <div>
@@ -667,8 +679,17 @@
                         </div>
                     </div>
                     <div class="bg-white p-6 rounded-lg shadow-md">
-                        <h3 class="text-lg font-semibold mb-4">Ventas por Territorio</h3>
+                         <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-semibold">
+                                ${isDealershipView ? `Ventas por Concesionario en ${state.ui.biChart.territory}` : 'Ventas por Territorio'}
+                            </h3>
+                            ${isDealershipView ? `<button onclick="window.app.resetBITerritoryChart()" class="text-sm text-blue-600 hover:underline">← Volver a Territorios</button>` : ''}
+                        </div>
                         <canvas id="salesByTerritoryChart"></canvas>
+                    </div>
+                    <div class="mt-8 bg-white p-6 rounded-lg shadow-md">
+                        <h3 class="text-lg font-semibold mb-4">Ventas vs. Pronóstico</h3>
+                        <canvas id="salesVsForecastChart"></canvas>
                     </div>
                 </div>
             `;
@@ -1565,6 +1586,59 @@
                     }
                 });
             },
+            renderSalesVsForecastChart: () => {
+                const salesByMonth = state.collections.sales.reduce((acc, sale) => {
+                    if (!sale.saleDate) return acc;
+                    const month = sale.saleDate.toDate().toISOString().slice(0, 7); // YYYY-MM
+                    acc[month] = (acc[month] || 0) + 1;
+                    return acc;
+                }, {});
+
+                const forecastsByMonth = state.collections.forecasts.reduce((acc, forecast) => {
+                    acc[forecast.month] = forecast.target;
+                    return acc;
+                }, {});
+
+                const allMonths = [...new Set([...Object.keys(salesByMonth), ...Object.keys(forecastsByMonth)])].sort();
+
+                const salesData = allMonths.map(month => salesByMonth[month] || 0);
+                const forecastData = allMonths.map(month => forecastsByMonth[month] || null);
+
+                const ctx = document.getElementById('salesVsForecastChart');
+                if (!ctx) return;
+
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: allMonths,
+                        datasets: [
+                            {
+                                label: 'Ventas Reales',
+                                data: salesData,
+                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1
+                            },
+                            {
+                                label: 'Pronóstico de Ventas',
+                                data: forecastData,
+                                type: 'line',
+                                fill: false,
+                                borderColor: 'rgba(255, 99, 132, 1)',
+                                tension: 0.1,
+                                order: -1
+                            }
+                        ]
+                    },
+                    options: {
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            },
 
             exportToCSV: (data, filename) => {
                 if (!data.length) {
@@ -1620,6 +1694,21 @@
                 state.ui.visibleVehicleColumns = Array.from(visibleColumns);
                 renderCurrentPage();
             },
+            getAgingInventory: () => {
+                const ninetyDaysAgo = new Date();
+                ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+                return state.collections.vehicles.filter(vehicle => {
+                    if (vehicle.status !== 'enConcesionario' || !vehicle.statusHistory) {
+                        return false;
+                    }
+                    const arrivalEntry = vehicle.statusHistory
+                        .filter(h => h.status === 'enConcesionario')
+                        .sort((a, b) => b.date.toDate() - a.date.toDate())[0];
+                    if (!arrivalEntry) return false;
+                    return arrivalEntry.date.toDate() < ninetyDaysAgo;
+                });
+            },
             calculateAverageDaysInStock: () => {
                 const soldVehicles = state.collections.vehicles.filter(v => v.status === 'vendido');
                 if (!soldVehicles.length) return 0;
@@ -1630,7 +1719,9 @@
                 soldVehicles.forEach(vehicle => {
                     if (!vehicle.statusHistory) return;
 
-                    const arrivalEntry = vehicle.statusHistory.find(h => h.status === 'enConcesionario');
+                    const arrivalEntry = vehicle.statusHistory
+                        .filter(h => h.status === 'enConcesionario')
+                        .sort((a, b) => b.date.toDate() - a.date.toDate())[0];
                     const saleEntry = vehicle.statusHistory.find(h => h.status === 'vendido');
 
                     if (arrivalEntry && saleEntry && arrivalEntry.date && saleEntry.date) {
@@ -1656,7 +1747,9 @@
                 let count = 0;
                 soldVehicles.forEach(vehicle => {
                     if (!vehicle.statusHistory) return;
-                    const arrivalEntry = vehicle.statusHistory.find(h => h.status === 'enConcesionario');
+                    const arrivalEntry = vehicle.statusHistory
+                        .filter(h => h.status === 'enConcesionario')
+                        .sort((a, b) => b.date.toDate() - a.date.toDate())[0];
                     const saleEntry = vehicle.statusHistory.find(h => h.status === 'vendido');
                     if (arrivalEntry && saleEntry && arrivalEntry.date && saleEntry.date) {
                         totalDays += Math.ceil(Math.abs(saleEntry.date.toDate() - arrivalEntry.date.toDate()) / (1000 * 60 * 60 * 24));
@@ -1677,7 +1770,9 @@
                 let count = 0;
                  soldVehicles.forEach(vehicle => {
                     if (!vehicle.statusHistory) return;
-                    const arrivalEntry = vehicle.statusHistory.find(h => h.status === 'enConcesionario');
+                    const arrivalEntry = vehicle.statusHistory
+                        .filter(h => h.status === 'enConcesionario')
+                        .sort((a, b) => b.date.toDate() - a.date.toDate())[0];
                     const saleEntry = vehicle.statusHistory.find(h => h.status === 'vendido');
                     if (arrivalEntry && saleEntry && arrivalEntry.date && saleEntry.date) {
                         totalDays += Math.ceil(Math.abs(saleEntry.date.toDate() - arrivalEntry.date.toDate()) / (1000 * 60 * 60 * 24));
@@ -1706,27 +1801,75 @@
                 }, {});
                 return salesByTerritory;
             },
+            resetBITerritoryChart: () => {
+                state.ui.biChart = { level: 'territory', territory: null };
+                renderCurrentPage();
+            },
             renderBITopCharts: () => {
-                const salesByTerritoryData = appController.calculateSalesByTerritory();
-                const labels = Object.keys(salesByTerritoryData);
-                const data = Object.values(salesByTerritoryData);
+                const { level, territory } = state.ui.biChart;
 
-                const ctx = document.getElementById('salesByTerritoryChart');
-                if (!ctx) return;
+                let chartData;
 
-                new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: labels,
+                if (level === 'dealership') {
+                    const salesInTerritory = state.collections.sales.filter(sale => {
+                        const dealer = state.collections.dealers.find(d => d.id === sale.dealerId);
+                        return dealer && dealer.territory === territory;
+                    });
+
+                    const salesByDealership = salesInTerritory.reduce((acc, sale) => {
+                        const dealer = state.collections.dealers.find(d => d.id === sale.dealerId);
+                        if (dealer) {
+                            acc[dealer.name] = (acc[dealer.name] || 0) + 1;
+                        }
+                        return acc;
+                    }, {});
+
+                    chartData = {
+                        labels: Object.keys(salesByDealership),
                         datasets: [{
-                            label: 'Ventas Totales',
-                            data: data,
+                            label: 'Ventas por Concesionario',
+                            data: Object.values(salesByDealership),
+                            backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1
+                        }]
+                    };
+                } else {
+                    const salesByTerritoryData = appController.calculateSalesByTerritory();
+                    chartData = {
+                        labels: Object.keys(salesByTerritoryData),
+                        datasets: [{
+                            label: 'Ventas Totales por Territorio',
+                            data: Object.values(salesByTerritoryData),
                             backgroundColor: 'rgba(22, 163, 74, 0.6)',
                             borderColor: 'rgba(22, 163, 74, 1)',
                             borderWidth: 1
                         }]
-                    },
+                    };
+                }
+
+                const ctx = document.getElementById('salesByTerritoryChart');
+                if (!ctx) return;
+
+                if (salesByTerritoryChartInstance) {
+                    salesByTerritoryChartInstance.destroy();
+                }
+
+                salesByTerritoryChartInstance = new Chart(ctx, {
+                    type: 'bar',
+                    data: chartData,
                     options: {
+                        onClick: (e) => {
+                            if (level === 'territory') {
+                                const points = salesByTerritoryChartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+                                if (points.length) {
+                                    const firstPoint = points[0];
+                                    const label = salesByTerritoryChartInstance.data.labels[firstPoint.index];
+                                    state.ui.biChart = { level: 'dealership', territory: label };
+                                    renderCurrentPage();
+                                }
+                            }
+                        },
                         scales: {
                             y: {
                                 beginAtZero: true
