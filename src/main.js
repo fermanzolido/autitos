@@ -1,3 +1,6 @@
+// Import Firebase initialization
+import './firebase'
+
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import { getFirestore, collection, onSnapshot, query } from 'firebase/firestore'
+import { collection, onSnapshot, query } from 'firebase/firestore'
+import { db } from '@/firebase'
 import { useAuthStore } from './auth'
 
 export function createCollectionStore(id, collectionName, constraintsFactory = null) {
@@ -9,7 +10,6 @@ export function createCollectionStore(id, collectionName, constraintsFactory = n
     const loading = ref(true)
 
     const authStore = useAuthStore()
-    const db = getFirestore()
 
     let unsubscribe = null
 

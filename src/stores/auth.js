@@ -1,14 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
+import { auth } from '@/firebase'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
   const role = ref(null)
   const userClaims = ref(null)
   const authLoading = ref(true)
-
-  const auth = getAuth()
 
   onAuthStateChanged(auth, async (firebaseUser) => {
     if (firebaseUser) {
