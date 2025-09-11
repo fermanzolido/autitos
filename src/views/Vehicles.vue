@@ -48,11 +48,42 @@
               <button
                 v-if="authStore.role === 'admin' || authStore.role === 'factory'"
                 @click="openEditVehicleModal(vehicle)"
-                class="text-indigo-600 hover:text-indigo-900"
+                class="text-indigo-600 hover:text-indigo-900 mr-4"
               >
                 Editar
               </button>
-              <!-- More actions can be added here -->
+              <button
+                v-if="authStore.role === 'admin'"
+                @click="handleDeleteVehicle(vehicle.id)"
+                class="text-red-600 hover:text-red-900 mr-4"
+              >
+                Eliminar
+              </button>
+              <select
+                v-if="(authStore.role === 'admin' || authStore.role === 'factory') && vehicle.status === 'enFabrica'"
+                @change="handleAssignDealer(vehicle.id, $event.target.value)"
+                class="border p-1 rounded text-xs"
+              >
+                <option value="" disabled :selected="!vehicle.dealerId">Asignar...</option>
+                <option v-for="dealer in dealerStore.items" :key="dealer.id" :value="dealer.id" :selected="vehicle.dealerId === dealer.id">
+                  {{ dealer.name }}
+                </option>
+              </select>
+
+              <button
+                v-if="authStore.role === 'dealer' && vehicle.status === 'asignado'"
+                @click="handleConfirmOrder(vehicle.id)"
+                class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 px-2 rounded text-xs"
+              >
+                Confirmar Pedido
+              </button>
+              <button
+                v-if="authStore.role === 'dealer' && vehicle.status === 'enTransito'"
+                @click="handleReceiveVehicle(vehicle.id)"
+                class="bg-green-500 hover:bg-green-700 text-white font-bold py-1 px-2 rounded text-xs"
+              >
+                Recibir Vehículo
+              </button>
             </td>
           </tr>
         </tbody>
@@ -73,12 +104,16 @@
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { useVehicleStore } from '@/stores/vehicles'
+import { useDealerStore } from '@/stores/dealers'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import Modal from '@/components/Modal.vue'
 import VehicleForm from '@/components/VehicleForm.vue'
 
 const authStore = useAuthStore()
 const uiStore = useUiStore()
 const vehicleStore = useVehicleStore()
+const dealerStore = useDealerStore()
+const functions = getFunctions()
 
 function openCreateVehicleModal() {
   uiStore.openModal('Añadir Nuevo Vehículo', null)
@@ -86,5 +121,53 @@ function openCreateVehicleModal() {
 
 function openEditVehicleModal(vehicle) {
   uiStore.openModal('Editar Vehículo', vehicle)
+}
+
+async function handleAssignDealer(vehicleId, dealerId) {
+  if (!dealerId) return
+  try {
+    const assignDealer = httpsCallable(functions, 'assignDealer')
+    await assignDealer({ vehicleId, dealerId })
+    // The UI will update automatically thanks to the real-time listener in the store.
+    // We could add a notification here if desired.
+  } catch (error) {
+    console.error("Error assigning dealer:", error)
+    // Handle error, e.g., show notification
+  }
+}
+
+async function handleDeleteVehicle(vehicleId) {
+  if (confirm('¿Estás seguro de que quieres eliminar este vehículo? Esta acción no se puede deshacer.')) {
+    try {
+      const deleteVehicle = httpsCallable(functions, 'deleteVehicle')
+      await deleteVehicle({ vehicleId })
+      // Optional: show success notification
+    } catch (error) {
+      console.error("Error deleting vehicle:", error)
+      // Optional: show error notification
+    }
+  }
+}
+
+async function handleConfirmOrder(vehicleId) {
+  if (confirm('¿Estás seguro de que quieres confirmar este pedido? El vehículo pasará a estado "En Tránsito".')) {
+    try {
+      const confirmOrder = httpsCallable(functions, 'handleConfirmOrder')
+      await confirmOrder({ vehicleId })
+    } catch (error) {
+      console.error("Error confirming order:", error)
+    }
+  }
+}
+
+async function handleReceiveVehicle(vehicleId) {
+  if (confirm('¿Estás seguro de que quieres marcar este vehículo como recibido?')) {
+    try {
+      const receiveVehicle = httpsCallable(functions, 'receiveVehicle')
+      await receiveVehicle({ vehicleId })
+    } catch (error) {
+      console.error("Error receiving vehicle:", error)
+    }
+  }
 }
 </script>

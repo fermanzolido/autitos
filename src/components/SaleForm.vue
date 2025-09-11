@@ -8,7 +8,9 @@
       <label class="block text-sm font-medium text-gray-700">Vehículo</label>
       <select v-model="formData.vehicleId" class="mt-1 block w-full p-2 border border-gray-300 rounded-md" required>
           <option value="" disabled>Seleccione un vehículo</option>
-          <!-- This will be populated from a store -->
+          <option v-for="vehicle in availableVehicleStore.items" :key="vehicle.id" :value="vehicle.id">
+            {{ vehicle.make }} {{ vehicle.model }} ({{ vehicle.vin }})
+          </option>
       </select>
     </div>
 
@@ -16,7 +18,9 @@
       <label class="block text-sm font-medium text-gray-700">Cliente</label>
       <select v-model="formData.customerId" class="mt-1 block w-full p-2 border border-gray-300 rounded-md" required>
           <option value="" disabled>Seleccione un cliente</option>
-          <!-- This will be populated from a store -->
+          <option v-for="customer in customerStore.items" :key="customer.id" :value="customer.id">
+            {{ customer.name }} ({{ customer.dni }})
+          </option>
       </select>
     </div>
 
@@ -37,9 +41,11 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { getFunctions, httpsCallable } from 'firebase/functions'
+import { useAvailableVehicleStore } from '@/stores/availableVehicles'
+import { useCustomerStore } from '@/stores/customers'
 
-// This form will need access to available vehicles and customers
-// We will add that logic later.
+const availableVehicleStore = useAvailableVehicleStore()
+const customerStore = useCustomerStore()
 
 const props = defineProps({
   sale: {

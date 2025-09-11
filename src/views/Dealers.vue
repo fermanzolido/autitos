@@ -36,9 +36,16 @@
               <button
                 v-if="authStore.role === 'admin'"
                 @click="openEditDealerModal(dealer)"
-                class="text-indigo-600 hover:text-indigo-900"
+                class="text-indigo-600 hover:text-indigo-900 mr-4"
               >
                 Editar
+              </button>
+              <button
+                v-if="authStore.role === 'admin'"
+                @click="handleDeleteDealer(dealer.id)"
+                class="text-red-600 hover:text-red-900"
+              >
+                Eliminar
               </button>
             </td>
           </tr>
@@ -60,12 +67,14 @@
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { useDealerStore } from '@/stores/dealers'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import Modal from '@/components/Modal.vue'
 import DealerForm from '@/components/DealerForm.vue'
 
 const authStore = useAuthStore()
 const uiStore = useUiStore()
 const dealerStore = useDealerStore()
+const functions = getFunctions()
 
 function openCreateDealerModal() {
   uiStore.openModal('Añadir Nuevo Concesionario', null)
@@ -73,5 +82,16 @@ function openCreateDealerModal() {
 
 function openEditDealerModal(dealer) {
   uiStore.openModal('Editar Concesionario', dealer)
+}
+
+async function handleDeleteDealer(dealerId) {
+  if (confirm('¿Estás seguro de que quieres eliminar este concesionario? Esta acción no se puede deshacer.')) {
+    try {
+      const deleteDealer = httpsCallable(functions, 'deleteDealer')
+      await deleteDealer({ dealerId })
+    } catch (error) {
+      console.error("Error deleting dealer:", error)
+    }
+  }
 }
 </script>

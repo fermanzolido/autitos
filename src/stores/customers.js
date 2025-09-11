@@ -1,11 +1,15 @@
+import { where } from 'firebase/firestore'
 import { createCollectionStore } from './createCollectionStore'
 
-// Admins and dealers can read customers.
-// More granular rules are difficult on the client-side without data duplication.
-// The security is enforced by Firestore rules; this is for data fetching.
-export const useCustomerStore = createCollectionStore('customers', 'customers', (authStore) => {
-    if (authStore.role === 'admin' || authStore.role === 'dealer') {
-        return []
+// In this model, customers are shared across the network.
+// A dealer might need to see if a customer already exists.
+// For a multi-tenant CRM where each dealer has their own customers,
+// we would add a constraint here. For now, it's a shared pool.
+const constraintsFactory = (authStore) => {
+    if (authStore.role === 'admin' || authStore.role === 'factory' || authStore.role === 'dealer') {
+        return [] // All authenticated users can see all customers
     }
-    return null
-})
+    return null // No data for unauthenticated users
+}
+
+export const useCustomerStore = createCollectionStore('customers', 'customers', constraintsFactory)

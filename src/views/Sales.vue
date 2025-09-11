@@ -41,8 +41,7 @@
 
     <Modal :is-open="uiStore.isModalOpen" @close="uiStore.closeModal()">
       <h2 class="text-2xl font-bold mb-4">{{ uiStore.modalTitle }}</h2>
-      <!-- A more advanced SaleForm would be needed to handle customer/vehicle selection -->
-      <p class="text-center p-4">El formulario de registro de ventas se implementará con más detalle, incluyendo la selección de vehículos y clientes disponibles.</p>
+      <SaleForm @close-modal="uiStore.closeModal()" />
     </Modal>
   </div>
 </template>
@@ -54,7 +53,7 @@ import { useSaleStore } from '@/stores/sales'
 import { useVehicleStore } from '@/stores/vehicles'
 import { useCustomerStore } from '@/stores/customers'
 import Modal from '@/components/Modal.vue'
-// import SaleForm from '@/components/SaleForm.vue' // To be used later
+import SaleForm from '@/components/SaleForm.vue'
 
 const authStore = useAuthStore()
 const uiStore = useUiStore()
