@@ -39,8 +39,7 @@
       </div>
     </div>
 
-    <Modal :is-open="uiStore.isModalOpen" @close="uiStore.closeModal()">
-      <h2 class="text-2xl font-bold mb-4">{{ uiStore.modalTitle }}</h2>
+    <Modal v-model="uiStore.isModalOpen" :title="uiStore.modalTitle">
       <SaleForm @close-modal="uiStore.closeModal()" />
     </Modal>
   </div>
