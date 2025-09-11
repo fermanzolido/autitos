@@ -582,52 +582,65 @@ exports.createFactoryOrder = functions.https.onCall(async (data, context) => {
     return { success: true, message: 'Factory order created successfully.' };
 });
 
-exports.getDashboardStats = functions.https.onCall(async (data, context) => {
-    if (!context.auth) {
-        throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
-    }
-
-    const { role, dealerId, territory } = context.auth.token;
-
-    try {
-        if (role === 'admin' || role === 'factory') {
-            const vehiclesSnapshot = await db.collection('vehicles').get();
-            const salesSnapshot = await db.collection('sales').get();
-            const dealersSnapshot = await db.collection('dealers').get();
-
-            const vehiclesInStock = vehiclesSnapshot.docs.filter(doc => doc.data().status !== 'vendido').length;
-
-            return {
-                vehiclesInStock: vehiclesInStock,
-                totalSales: salesSnapshot.size,
-                totalDealers: dealersSnapshot.size,
-            };
-        }
-
-        if (role === 'dealer') {
-            if (!dealerId) {
-                throw new functions.https.HttpsError('permission-denied', 'Dealer user must have a dealerId claim.');
+exports.getDashboardStats = functions.https.onRequest((req, res) => {
+    cors(req, res, async () => {
+        try {
+            const idToken = req.headers.authorization?.split('Bearer ')[1];
+            if (!idToken) {
+                functions.logger.error("No authorization token provided.");
+                res.status(401).send({ error: 'Unauthorized' });
+                return;
             }
 
-            const vehiclesQuery = db.collection('vehicles').where('dealerId', '==', dealerId);
-            const salesQuery = db.collection('sales').where('dealerId', '==', dealerId);
+            const decodedToken = await admin.auth().verifyIdToken(idToken);
+            const { role, dealerId } = decodedToken;
+            functions.logger.info(`Fetching stats for role: ${role}, dealerId: ${dealerId || 'N/A'}`);
 
-            const vehiclesSnapshot = await vehiclesQuery.get();
-            const salesSnapshot = await salesQuery.get();
+            let stats = {};
 
-            const vehiclesInStock = vehiclesSnapshot.docs.filter(doc => doc.data().status !== 'vendido').length;
+            if (role === 'admin' || role === 'factory') {
+                const vehiclesPromise = db.collection('vehicles').get();
+                const salesPromise = db.collection('sales').get();
+                const dealersPromise = db.collection('dealers').get();
 
-            return {
-                vehiclesInStock: vehiclesInStock,
-                totalSales: salesSnapshot.size,
-            };
+                const [vehiclesSnapshot, salesSnapshot, dealersSnapshot] = await Promise.all([vehiclesPromise, salesPromise, dealersPromise]);
+                const vehiclesInStock = vehiclesSnapshot.docs.filter(doc => doc.data().status !== 'vendido').length;
+
+                stats = {
+                    vehiclesInStock,
+                    totalSales: salesSnapshot.size,
+                    totalDealers: dealersSnapshot.size,
+                };
+            } else if (role === 'dealer') {
+                if (!dealerId) {
+                    functions.logger.error(`Dealer ${decodedToken.uid} is missing dealerId claim.`);
+                    res.status(403).send({ error: 'Permission denied: Dealer is missing dealerId claim.' });
+                    return;
+                }
+
+                const vehiclesQuery = db.collection('vehicles').where('dealerId', '==', dealerId);
+                const salesQuery = db.collection('sales').where('dealerId', '==', dealerId);
+
+                const [vehiclesSnapshot, salesSnapshot] = await Promise.all([vehiclesQuery.get(), salesQuery.get()]);
+                const vehiclesInStock = vehiclesSnapshot.docs.filter(doc => doc.data().status !== 'vendido').length;
+
+                stats = {
+                    vehiclesInStock,
+                    totalSales: salesSnapshot.size,
+                };
+            } else {
+                 functions.logger.warn(`User ${decodedToken.uid} with unhandled role '${role}' called getDashboardStats.`);
+            }
+
+            res.status(200).send(stats);
+
+        } catch (error) {
+            functions.logger.error("Error in getDashboardStats:", error);
+            if (error.code === 'auth/id-token-expired') {
+                res.status(401).send({ error: 'Token expired, please re-authenticate.' });
+            } else {
+                res.status(500).send({ error: 'An unexpected error occurred.' });
+            }
         }
-
-        // Default empty stats for other roles or if no role is found
-        return {};
-
-    } catch (error) {
-        console.error("Error getting dashboard stats:", error);
-        throw new functions.https.HttpsError('internal', 'An internal error occurred while fetching dashboard statistics.');
-    }
+    });
 });

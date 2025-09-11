@@ -45,24 +45,47 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { getFunctions, httpsCallable } from 'firebase/functions'
 import Chart from 'chart.js/auto' // Keep for now, might be used later
 
 const authStore = useAuthStore()
-const functions = getFunctions()
 
 const stats = ref({})
 const loading = ref(true)
+const error = ref(null)
+
+// IMPORTANT: Replace with your actual cloud function URL
+const functionsUrl = 'https://us-central1-autitos-82ad2.cloudfunctions.net'
 
 async function fetchDashboardStats() {
   loading.value = true
+  error.value = null
+
+  if (!authStore.user) {
+      error.value = "User not authenticated."
+      loading.value = false
+      return
+  }
+
   try {
-    const getDashboardStats = httpsCallable(functions, 'getDashboardStats')
-    const result = await getDashboardStats()
-    stats.value = result.data
-  } catch (error) {
-    console.error("Error fetching dashboard stats:", error)
-    // Optionally, show an error message to the user
+    const token = await authStore.user.getIdToken()
+    const response = await fetch(`${functionsUrl}/getDashboardStats`, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    })
+
+    if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`)
+    }
+
+    stats.value = await response.json()
+
+  } catch (err) {
+    console.error("Error fetching dashboard stats:", err)
+    error.value = err.message
   } finally {
     loading.value = false
   }
