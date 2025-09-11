@@ -581,3 +581,53 @@ exports.createFactoryOrder = functions.https.onCall(async (data, context) => {
     await db.collection('factory_orders').add(newOrder);
     return { success: true, message: 'Factory order created successfully.' };
 });
+
+exports.getDashboardStats = functions.https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
+    }
+
+    const { role, dealerId, territory } = context.auth.token;
+
+    try {
+        if (role === 'admin' || role === 'factory') {
+            const vehiclesSnapshot = await db.collection('vehicles').get();
+            const salesSnapshot = await db.collection('sales').get();
+            const dealersSnapshot = await db.collection('dealers').get();
+
+            const vehiclesInStock = vehiclesSnapshot.docs.filter(doc => doc.data().status !== 'vendido').length;
+
+            return {
+                vehiclesInStock: vehiclesInStock,
+                totalSales: salesSnapshot.size,
+                totalDealers: dealersSnapshot.size,
+            };
+        }
+
+        if (role === 'dealer') {
+            if (!dealerId) {
+                throw new functions.https.HttpsError('permission-denied', 'Dealer user must have a dealerId claim.');
+            }
+
+            const vehiclesQuery = db.collection('vehicles').where('dealerId', '==', dealerId);
+            const salesQuery = db.collection('sales').where('dealerId', '==', dealerId);
+
+            const vehiclesSnapshot = await vehiclesQuery.get();
+            const salesSnapshot = await salesQuery.get();
+
+            const vehiclesInStock = vehiclesSnapshot.docs.filter(doc => doc.data().status !== 'vendido').length;
+
+            return {
+                vehiclesInStock: vehiclesInStock,
+                totalSales: salesSnapshot.size,
+            };
+        }
+
+        // Default empty stats for other roles or if no role is found
+        return {};
+
+    } catch (error) {
+        console.error("Error getting dashboard stats:", error);
+        throw new functions.https.HttpsError('internal', 'An internal error occurred while fetching dashboard statistics.');
+    }
+});
